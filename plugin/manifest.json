@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "workspan.tracker",
+  "name": "Workspan",
+  "version": "0.1.0",
+  "author": "Ryan Brosas",
+  "license": "MIT",
+  "description": "Local working-time accounting: attested sessions, inferred attended windows and agent runtime, kept separate and never added together.",
+  "kinds": ["bar-widget"],
+  "activation": "on-demand",
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Workspan",
+    "description": "Tracked work from the local daemon: attested session, inferred attended windows and agent runtime, with coverage warnings. Strictly a display: the daemon owns all state.",
+    "category": "Productivity",
+    "aliases": ["workspan", "time", "tracker"],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "statusFile": "",
+      "socketPath": "",
+      "cliPath": "workspan",
+      "project": "",
+      "refreshSeconds": 30,
+      "glyph": ""
+    },
+    "schema": [
+      { "key": "statusFile", "type": "path", "label": "Status file", "defaultValue": "", "description": "Empty uses the daemon default: $XDG_RUNTIME_DIR/workspan/status.json" },
+      { "key": "socketPath", "type": "path", "label": "Daemon socket", "defaultValue": "", "description": "Empty uses the daemon default: $XDG_RUNTIME_DIR/workspan/workspan.sock" },
+      { "key": "cliPath", "type": "string", "label": "Workspan CLI", "defaultValue": "workspan", "description": "Executable used for session controls. A checkout can point at a wrapper script instead." },
+      { "key": "project", "type": "string", "label": "Session project", "defaultValue": "", "description": "Client or project attributed when a session is started from the bar. Empty starts an unallocated session rather than guessing." },
+      { "key": "refreshSeconds", "type": "integer", "label": "Refresh interval (seconds)", "min": 5, "max": 300, "step": 5, "defaultValue": 30 },
+      { "key": "glyph", "type": "string", "label": "Bar glyph", "defaultValue": "", "description": "Optional Nerd Font glyph shown before the time. Empty shows the time only, since no timer glyph is currently in use in the shell." }
+    ]
+  }
+}

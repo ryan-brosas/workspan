@@ -13,7 +13,7 @@ import { eventId, fingerprint, type EvidenceEvent, type Kind, type Origin } from
 export const SCHEMA_VERSION = 1;
 
 export interface Observation extends EvidenceEvent { eventId: string; receivedAt: number }
-export interface SessionRow { id: string; project: string | null; startedAt: number; endedAt: number | null; state: "running" | "stopped" }
+export interface SessionRow { id: string; session: string; project: string | null; startedAt: number; endedAt: number | null; state: "running" | "stopped" }
 export interface ConflictRow { eventId: string; reason: string; detectedAt: number }
 export interface SourceHealth { source: string; events: number; cursor: number }
 
@@ -33,7 +33,7 @@ create table if not exists conflicts (
   event_id text primary key, reason text not null, first_fingerprint text not null, seen_fingerprint text not null, detected_at integer not null
 );
 create table if not exists sessions (
-  id text primary key, project text, started_at integer not null, ended_at integer, state text not null
+  id text primary key, source_session text not null, project text, started_at integer not null, ended_at integer, state text not null
 );
 create table if not exists windows (
   id text primary key, root text not null, client text not null, session_id text not null,
@@ -100,8 +100,8 @@ export class WorkspanStore implements WindowPort {
     if (event.kind === "session-start") {
       const id = sessionKey(event);
       const row = this.db.prepare("select started_at from sessions where id = ?").get(id) as { started_at: number } | undefined;
-      if (!row) this.db.prepare("insert into sessions(id, project, started_at, ended_at, state) values(?,?,?,null,'running')")
-        .run(id, event.project ?? null, event.at);
+      if (!row) this.db.prepare("insert into sessions(id, source_session, project, started_at, ended_at, state) values(?,?,?,?,null,'running')")
+        .run(id, event.session, event.project ?? null, event.at);
       return;
     }
     if (event.kind === "session-stop") {
@@ -144,7 +144,7 @@ export class WorkspanStore implements WindowPort {
   }
   sessionRows(): SessionRow[] {
     return (this.db.prepare("select * from sessions order by started_at asc").all() as Record<string, unknown>[]).map(row => ({
-      id: String(row.id), project: row.project === null ? null : String(row.project),
+      id: String(row.id), session: String(row.source_session), project: row.project === null ? null : String(row.project),
       startedAt: Number(row.started_at), endedAt: row.ended_at === null ? null : Number(row.ended_at),
       state: String(row.state) as SessionRow["state"],
     }));

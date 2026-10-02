@@ -79,7 +79,10 @@ test("an attested session reports separately and stays provisional while open", 
   expect(status.coverage.open_sessions).toBe(1);
   expect(status.current_session?.provisional_ms).toBeGreaterThanOrEqual(0);
 
-  await cli("session", "stop", "--session", started.session);
+  // The status carries the value session.stop takes back, so the widget never
+  // has to know the daemon's internal key format.
+  expect(status.current_session?.session).toBe(started.session);
+  await cli("session", "stop", "--session", status.current_session!.session);
   status = JSON.parse((await cli("status")).stdout) as ReturnType<typeof readStatusFile>;
   expect(status.coverage.open_sessions).toBe(0);
   expect(status.current_session).toBeNull();

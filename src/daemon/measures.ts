@@ -88,7 +88,8 @@ export interface Status {
   generated_at: number;
   idle_gap_ms: number;
   measures: Record<MeasureName, MeasureStatus>;
-  current_session: { id: string; project: string | null; started_at: number; provisional_ms: number } | null;
+  /** `id` is the internal key; `session` is what session.stop takes back. */
+  current_session: { id: string; session: string; project: string | null; started_at: number; provisional_ms: number } | null;
   coverage: {
     events: number;
     conflicts: number;
@@ -114,7 +115,7 @@ export function buildStatus(store: WorkspanStore, options: { idleGapMs: number; 
   for (const row of sessions) {
     if (row.endedAt === null) {
       openSessions++;
-      current = { id: row.id, project: row.project, started_at: row.startedAt, provisional_ms: Math.max(0, now - row.startedAt) };
+      current = { id: row.id, session: row.session, project: row.project, started_at: row.startedAt, provisional_ms: Math.max(0, now - row.startedAt) };
       continue;
     }
     attested.push({ start: row.startedAt, end: row.endedAt, project: row.project ?? undefined });
