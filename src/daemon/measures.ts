@@ -4,7 +4,7 @@
  */
 import { reconcileIntervals } from "../core/native.ts";
 import type { Interval } from "../core/ledger.ts";
-import { clockScope, type WorkspanStore } from "./db.ts";
+import { clockScope, type Observation, type WorkspanStore } from "./db.ts";
 import type { EngineInfo } from "./engine.ts";
 
 export const MEASURES = ["attested", "inferred", "agent"] as const;
@@ -104,6 +104,27 @@ export interface Status {
   non_additive: string;
 }
 
+/**
+ * Pair agent-turn evidence into intervals. Exported because the migration
+ * reconciler must count imported evidence exactly as the report does.
+ */
+export function agentIntervals(observations: readonly Observation[]): { intervals: Attributed[]; open: number } {
+  const intervals: Attributed[] = [];
+  // A turn is paired per source session: the completion is a separate event with
+  // its own id, so identity is the session, not the start event.
+  const starts = new Map<string, { at: number; project?: string }>();
+  for (const event of observations) {
+    const key = [event.source, event.instance, event.session].join("\u0000");
+    if (event.kind === "agent-start") starts.set(key, { at: event.at, project: event.project });
+    // An end without a start is not evidence of a duration, so it contributes nothing.
+    if (event.kind === "agent-end") {
+      const start = starts.get(key);
+      if (start) { intervals.push({ start: start.at, end: event.at, project: start.project ?? event.project }); starts.delete(key); }
+    }
+  }
+  return { intervals, open: starts.size };
+}
+
 export function buildStatus(store: WorkspanStore, options: { idleGapMs: number; now?: number; engine?: EngineInfo }): Status {
   const now = options.now ?? Date.now();
   const observations = store.observations();
@@ -130,20 +151,7 @@ export function buildStatus(store: WorkspanStore, options: { idleGapMs: number; 
     .map(w => ({ start: w.start, end: w.end, project: w.root === "" ? undefined : w.root }));
 
   // Agent runtime: paired turn evidence. A turn with no end stays open and visible.
-  const agent: Attributed[] = [];
-  // A turn is paired per source session: the completion is a separate event with
-  // its own id, so identity is the session, not the start event.
-  const starts = new Map<string, { at: number; project?: string }>();
-  for (const event of observations) {
-    const key = [event.source, event.instance, event.session].join("\u0000");
-    if (event.kind === "agent-start") starts.set(key, { at: event.at, project: event.project });
-    // An end without a start is not evidence of a duration, so it contributes nothing.
-    if (event.kind === "agent-end") {
-      const start = starts.get(key);
-      if (start) { agent.push({ start: start.at, end: event.at, project: start.project ?? event.project }); starts.delete(key); }
-    }
-  }
-  const openTurns = starts.size;
+  const { intervals: agent, open: openTurns } = agentIntervals(observations);
 
   return {
     schema: 1,

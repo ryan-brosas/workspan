@@ -47,6 +47,11 @@ native lane, and the tests asserting the default lane will fail if it is set.
   classification rule means changing the laws and the proof gate with it.
 - **Nothing stores content.** No prompts, replies, titles, URLs, credentials or
   tool payloads in the database, spools, status file or logs.
+- **Migration never touches the live ledger by accident.** It plans first, imports
+  into an explicitly named target, refuses the daemon's own database without an
+  explicit flag, and reports whether the imported measure reconciles with the
+  source. Imported Pi evidence is agent runtime, never attended work and never
+  attributed to a client that no mapping named.
 - **Uncertainty stays visible.** A stopped daemon, an open turn, a conflict or an
   unallocated segment is reported, never smoothed into a confident number.
 

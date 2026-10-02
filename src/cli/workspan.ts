@@ -10,7 +10,12 @@ import { socketPath as defaultSocket } from "../daemon/paths.ts";
 import { encodeFrame, parseResponse, PROTOCOL_VERSION, type Method } from "../protocol.ts";
 
 const args = process.argv.slice(2);
-const FLAGS = new Set(["--socket", "--project", "--session", "--file", "--db", "--since-days", "--since-hours", "--limit", "--instance", "--turns", "--chunks"]);
+const FLAGS = new Set(["--socket", "--project", "--session", "--file", "--db", "--since-days", "--since-hours", "--limit", "--instance", "--turns", "--chunks", "--target", "--map"]);
+const flags = (name: string): string[] => {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) if (args[i] === name && args[i + 1] !== undefined) out.push(args[i + 1]);
+  return out;
+};
 const flag = (name: string): string | undefined => { const at = args.indexOf(name); return at === -1 ? undefined : args[at + 1]; };
 const positional: string[] = [];
 for (let i = 0; i < args.length; i++) {
@@ -71,6 +76,38 @@ async function main(): Promise<number> {
     const { auditReceipts } = await import("../adapters/receipt-audit.ts");
     const report = auditReceipts({ turnsLog: turns, chunksLog: chunks, ...(flag("--instance") ? { label: flag("--instance")! } : {}) });
     console.log(JSON.stringify(report, null, 2));
+    // The gate: a scope with unresolved rows is not fit to migrate yet.
+    if (args.includes("--require-clean") && report.review.length > 0) {
+      console.error(`audit is not clean: ${report.review.length} receipt(s) need review`);
+      return 1;
+    }
+    return 0;
+  }
+  if (group === "migrate") {
+    const chunks = flag("--chunks");
+    const target = flag("--target");
+    if (!chunks || !target) throw new Error("migrate needs --chunks <file.jsonl> and --target <database>");
+    const scopeMap: Record<string, string> = {};
+    for (const pair of flags("--map")) {
+      const at = pair.indexOf("=");
+      if (at <= 0) throw new Error("--map needs scope=project");
+      scopeMap[pair.slice(0, at)] = pair.slice(at + 1);
+    }
+    const { migratePiHistory } = await import("../adapters/migrate.ts");
+    const report = migratePiHistory({
+      chunksLog: chunks,
+      targetDatabase: target,
+      scopeMap,
+      apply: args.includes("--apply"),
+      allowLiveDatabase: args.includes("--allow-live-database"),
+      ...(flag("--instance") ? { instance: flag("--instance")! } : {}),
+    });
+    if (report.reconciliation && !report.reconciliation.equal) {
+      console.error(JSON.stringify(report, null, 2));
+      console.error("migration reconciliation failed: imported evidence does not match the source");
+      return 1;
+    }
+    console.log(JSON.stringify(report, null, 2));
     return 0;
   }
   if (group === "ingest-codex") {
@@ -101,7 +138,7 @@ async function main(): Promise<number> {
     console.log(JSON.stringify(await request("ingest", { events }), null, 2));
     return 0;
   }
-  throw new Error("usage: workspan status|engine [--check]|health|ingest --file f.jsonl|ingest-codex [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl|session start --project P|session stop --session S");
+  throw new Error("usage: workspan status|engine [--check]|health|ingest --file f.jsonl|ingest-codex [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl [--require-clean]|migrate --chunks f.jsonl --target db [--map scope=project] [--apply]|session start --project P|session stop --session S");
 }
 
 main().then(code => process.exit(code)).catch((error: unknown) => {
