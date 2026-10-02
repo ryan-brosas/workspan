@@ -17,6 +17,39 @@ Read [README.md](README.md) for current status and [the architecture](docs/archi
 - Keep metadata only by default. Do not store conversation bodies, screenshots, window titles, URLs, raw tool payloads, credentials, or customer data.
 - Treat private client endpoints and local caches as versioned observations, not supported public APIs. Validate event coverage and replay behavior before claiming automatic tracking.
 
+## Verified checks
+
+Run these before treating the workspace as sound. Each was run on this host; the
+Bend gates need the pinned toolchain (see [docs/bend.md](docs/bend.md)):
+
+```sh
+bash scripts/install-bend-ci.sh /tmp/bend-ci
+export PATH=/tmp/bend-ci/bin:$PATH BEND_SOURCE_DIR=/tmp/bend-ci/source
+
+bun run build:check   # generated policy matches its .bend sources
+bun run proof:check   # every stated audit law is proven
+bun test              # policy, lane parity, daemon, adapters, widget helpers
+bun run check         # types
+```
+
+Set the compiler on `PATH`, never `BEND_EXECUTABLE`: that variable selects the
+native lane, and the tests asserting the default lane will fail if it is set.
+
+## Repository invariants
+
+- **One accounting authority.** Every measure total comes from Bend through
+  `src/core`. Never recompute a total in JavaScript, and never add two measures
+  together.
+- **One writer.** The daemon owns the database. The CLI and the widget are clients;
+  the widget reads `status.json` and runs the CLI as an argv array.
+- **Inherited policy is not casually edited.** `src/core/*.bend` and
+  `generated/policy.mjs` are inherited and pinned by digest. Changing a
+  classification rule means changing the laws and the proof gate with it.
+- **Nothing stores content.** No prompts, replies, titles, URLs, credentials or
+  tool payloads in the database, spools, status file or logs.
+- **Uncertainty stays visible.** A stopped daemon, an open turn, a conflict or an
+  unallocated segment is reported, never smoothed into a confident number.
+
 ## Delivery boundary
 
 Local implementation is separate from enabling a service, modifying desktop or agent configuration, importing live history, or changing official hours. Obtain the applicable approval before those actions. Load the installed Omarchy skill before desktop configuration or plugin installation. No remote push, publication, or release is implied by this project setup.

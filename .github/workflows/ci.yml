@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      BEND_NO_TELEMETRY: "1"
+      CC: clang-19
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.0
+      # The daemon targets the Node floor (node:sqlite), so it is exercised there.
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.19.0'
+      - name: Install native compiler dependency
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang-19
+      - name: Install the pinned Bend toolchain
+        run: |
+          bash scripts/install-bend-ci.sh "$RUNNER_TEMP/bend"
+          # The compiler goes on PATH. BEND_EXECUTABLE would select the native lane,
+          # and the tests that assert the default lane are meant to see generated policy.
+          echo "$RUNNER_TEMP/bend/bin" >> "$GITHUB_PATH"
+          echo "BEND_SOURCE_DIR=$RUNNER_TEMP/bend/source" >> "$GITHUB_ENV"
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Reject a stale generated Bend policy
+        run: bun run build:check
+      - name: Check the proof obligations
+        run: bun run proof:check
+      - name: Type check
+        run: bun run check
+      - name: Test policy, lanes, daemon and adapters
+        run: bun run test
+      - name: Test the widget helpers on plain Node
+        run: node --test plugin/tests/workspan.test.mjs
+      # The Omarchy CLI lives on an Omarchy desktop, so the manifest is validated
+      # from its own contract here rather than shelling out to it.
+      - name: Validate the plugin manifest
+        run: |
+          jq -e . plugin/manifest.json > /dev/null
+          test "$(jq -r .schemaVersion plugin/manifest.json)" = 1
+          test "$(jq -r .id plugin/manifest.json)" = workspan.tracker
+          test -f "plugin/$(jq -r .entryPoints.barWidget plugin/manifest.json)"
+          if find plugin -path plugin/.git -prune -o -type l -print -quit | grep -q .; then
+            echo 'Plugin repositories may not contain symlinks' >&2
+            exit 1
+          fi

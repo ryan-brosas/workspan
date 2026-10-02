@@ -12,6 +12,10 @@ test("an unsupported protocol version is rejected instead of guessed", () => {
   expect(() => parseRequest(JSON.stringify({ id: "r1", method: "status" }))).toThrow("unsupported protocol version");
 });
 
+test("the engine method is part of the contract", () => {
+  expect(parseRequest(JSON.stringify({ v: 1, id: "r1", method: "engine" })).method).toBe("engine");
+});
+
 test("an unknown method is rejected rather than silently ignored", () => {
   expect(() => parseRequest(JSON.stringify({ v: 1, id: "r1", method: "shutdown" }))).toThrow("unknown method");
 });

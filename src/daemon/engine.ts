@@ -31,14 +31,23 @@ export interface EngineInfo {
   bytes: number | null;
   /** Compiler version the artifact was generated with, read from its own header. */
   version: string | null;
-  /** The Bend sources the artifact is generated from. */
+  /** The Bend sources the artifact is generated from, present on disk. */
   sources: string[];
+  /** Proof obligations that live beside the sources and gate changes to them. */
+  proofs: string[];
   artifact: string;
 }
 
-function sourceNames(): string[] {
-  try { return readdirSync(coreDir).filter(name => name.endsWith(".bend")).sort(); }
-  catch { return []; }
+/** What `scripts/bend-entry.ts` actually imports, directly or transitively. */
+const POLICY_SOURCES = ["engine.bend", "batch.bend", "audit.bend"];
+/** Laws and their witnesses: not part of the artifact, but they gate it. */
+const PROOF_SOURCES = ["LAWS.bend", "PROOF.bend"];
+
+function present(names: readonly string[]): string[] {
+  try {
+    const onDisk = new Set(readdirSync(coreDir));
+    return names.filter(name => onDisk.has(name)).sort();
+  } catch { return []; }
 }
 
 function artifactVersion(text: string): string | null {
@@ -60,7 +69,8 @@ export function engineInfo(options: NativeOptions = {}): EngineInfo {
     digest,
     bytes: text ? Buffer.byteLength(text) : null,
     version: text ? artifactVersion(text) : null,
-    sources: sourceNames(),
+    sources: present(POLICY_SOURCES),
+    proofs: present(PROOF_SOURCES),
     artifact: artifactPath,
   };
 }

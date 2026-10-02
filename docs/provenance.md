@@ -25,12 +25,33 @@ implementation of the arithmetic, not two that drift.
 | `src/core/audit.bend` | `audit.bend` | `73394644f09700d9e6a5fb4984d81315481ad242182db8224608326dcae0bffa` |
 | `src/core/generated/policy.mjs` | `generated/policy.mjs` | `144316b726023c9e320fce225345680441fb2dbc0ea1cc623c111b129ca524a9` |
 | `src/core/generated/policy.d.mts` | `generated/policy.d.mts` | `0acb9a5c81fff18dc43747763dfe5948a238ff9690fc49b92bbcf1d629e8587d` |
+| `src/core/LAWS.bend` | `LAWS.bend` | `9ecf1df257c0092467ddd760dff6d4fadcdb09c1dc8be9fbea4869e802c2b493` |
+| `src/core/PROOF.bend` | `PROOF.bend` | `63da53e0e146f74da7b961c20fecc05087b9dd206a88246f05211ff7b8b48289` |
 | `THIRD_PARTY_NOTICES.md` | `THIRD_PARTY_NOTICES.md` | `e043982002cb41779cb7782f09a6db754679a4a447e7663109fb0bc97edeb786` |
 
 The copied `.ts` files carry a one-line provenance header; the `.bend` sources,
 the generated artifact and the notices are byte-identical to upstream. The
 `.bend` files are left byte-exact on purpose: `native.ts` hashes them into its
 native-lane cache key, so any edit is a deliberate policy change, not a comment.
+
+## Ported gates
+
+The proof obligations are not inherited as files only: the gates that run them are
+ported too, with their fixtures pointed at `src/core`.
+
+| Workspan | Upstream | Change |
+| --- | --- | --- |
+| `scripts/bend-toolchain.{json,mjs,d.mts}` | same | none — one owner for the pin |
+| `scripts/install-bend-ci.sh` | same | none |
+| `scripts/bend-entry.ts`, `scripts/build-bend.mjs` | same | sources read from `src/core`, artifact written to `src/core/generated` |
+| `test/proof-gate.test.ts` | same | fixture copies the five `.bend` files from `src/core` |
+| `test/build-gate.test.ts` | same | fixture mirrors the `src/core` layout |
+| `test/native.test.ts` | same | import paths only |
+
+`audit.test.ts` was **not** ported: it exercises the Pi extension and the label
+registry (`extension.ts`, `labels.ts`), which Workspan deliberately does not have.
+The audit lane itself (`auditTurnReceipts`) is reachable from `src/core/native.ts`
+and is covered by `test/native.test.ts`; wiring it to adapters is still open.
 
 ## Adapted, not copied
 

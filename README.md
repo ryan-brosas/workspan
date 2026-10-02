@@ -6,15 +6,22 @@ Workspan is the proposed independent successor to the Pi-only time-tracking inte
 
 ## Current state
 
-The local vertical slice exists: an inherited accounting core (`src/core/`, see [docs/provenance.md](docs/provenance.md)), a single-writer daemon over a private Unix socket, a CLI, and the `status.json` the desktop plugin will watch. It runs today against a fixture database and synthetic evidence:
+The local vertical slice exists and runs: an inherited Bend accounting core (`src/core/`, see [docs/bend.md](docs/bend.md) and [docs/provenance.md](docs/provenance.md)), a single-writer daemon over a private Unix socket, a CLI, a read-only local Codex adapter, and an Omarchy bar widget that reads the status file the daemon writes.
 
 ```sh
+# The gates. Bend needs its pinned toolchain (never BEND_EXECUTABLE: that selects
+# the native lane, which is a deliberate choice rather than a default).
+bash scripts/install-bend-ci.sh /tmp/bend-ci
+export PATH=/tmp/bend-ci/bin:$PATH BEND_SOURCE_DIR=/tmp/bend-ci/source
+bun run build:check && bun run proof:check && bun test && bun run check
+
+# The slice itself.
 bun src/daemon/main.ts --db /tmp/demo.sqlite --runtime-dir /tmp/demo-run &
 bun src/cli/workspan.ts --socket /tmp/demo-run/workspan.sock session start --project coral
-bun src/cli/workspan.ts --socket /tmp/demo-run/workspan.sock status
+bun src/cli/workspan.ts --socket /tmp/demo-run/workspan.sock engine --check
 ```
 
-No service, plugin, live-history import or migration is installed or enabled here. The existing [pi-time-tracker](../pi-time-tracker/README.md) remains intact and is still the installed tracker. The public repository is <https://github.com/ryan-brosas/workspan>; [packaging/](packaging/README.md) holds a daemon unit that is designed but not installed.
+Nothing here imports live history, enables a service or migrates records: the daemon runs only when started by hand, and the adapter reads another application's database read-only. The widget is installed on this machine at `~/.config/omarchy/plugins/workspan.tracker` and is removable with `omarchy plugin remove workspan.tracker`. The existing [pi-time-tracker](../pi-time-tracker/README.md) remains intact and is still the installed tracker. The public repository is <https://github.com/ryan-brosas/workspan>; [packaging/](packaging/README.md) holds a daemon unit that is designed but not installed.
 
 ## Architecture and source research
 

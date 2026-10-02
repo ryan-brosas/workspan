@@ -18,8 +18,12 @@ test("the reported artifact is the one on disk, by digest", () => {
 test("the artifact names the compiler that generated it, and the sources it came from", () => {
   const info = engineInfo();
   expect(info.version).toBe("2.0.31");
-  expect(info.sources).toEqual(readdirSync(coreDir).filter(name => name.endsWith(".bend")).sort());
+  // The policy sources are the ones the build entry imports; the proof files sit
+  // beside them and gate changes without being part of the artifact.
   expect(info.sources).toEqual(["audit.bend", "batch.bend", "engine.bend"]);
+  expect(info.proofs).toEqual(["LAWS.bend", "PROOF.bend"]);
+  const onDisk = readdirSync(coreDir);
+  for (const name of [...info.sources, ...info.proofs]) expect(onDisk).toContain(name);
 });
 
 test("the default lane is the generated policy, so no compiler is needed to report hours", () => {
