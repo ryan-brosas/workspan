@@ -49,26 +49,51 @@ export const totalOf = (segments: readonly Segment[]): number => segments.reduce
  * merged: a projectless stretch next to a claimed one stays visible.
  */
 export function partitionByProject(intervals: readonly Attributed[]): { projects: Map<string, number>; unallocated: number; ambiguous: number; total: number } {
-  const boundaries = [...new Set(intervals.flatMap(i => [i.start, i.end]))].sort((a, b) => a - b);
+  // A sweep, not a scan per boundary: the previous version walked every interval for
+  // every elementary segment, so a year of history (tens of thousands of windows)
+  // turned each report into seconds of work. This is O(n log n) and keeps the same
+  // semantics: disjoint parts that cover the union exactly.
+  type Point = { at: number; delta: 1 | -1; project?: string };
+  const points: Point[] = [];
+  for (const interval of intervals) {
+    if (interval.end <= interval.start) continue;
+    points.push({ at: interval.start, delta: 1, ...(interval.project ? { project: interval.project } : {}) });
+    points.push({ at: interval.end, delta: -1, ...(interval.project ? { project: interval.project } : {}) });
+  }
+  // Ends sort before starts at the same instant, so touching intervals are not
+  // treated as overlapping.
+  points.sort((a, b) => a.at - b.at || a.delta - b.delta);
+
+  const claims = new Map<string, number>();
   const projects = new Map<string, number>();
-  let unallocated = 0, ambiguous = 0;
-  for (let i = 0; i + 1 < boundaries.length; i++) {
-    const start = boundaries[i], end = boundaries[i + 1];
-    if (end <= start) continue;
-    const claims = new Set<string>();
-    let uncovered = true, unclaimed = false;
-    for (const interval of intervals) {
-      if (interval.start < end && interval.end > start) {
-        uncovered = false;
-        if (interval.project) claims.add(interval.project);
-        else unclaimed = true;
+  let active = 0, unclaimed = 0, unallocated = 0, ambiguous = 0;
+  let previous: number | null = null;
+  let index = 0;
+  while (index < points.length) {
+    const at = points[index].at;
+    if (previous !== null && at > previous && active > 0) {
+      const ms = at - previous;
+      if (claims.size > 1) ambiguous += ms;
+      else if (claims.size === 1 && unclaimed === 0) {
+        const only = claims.keys().next().value as string;
+        projects.set(only, (projects.get(only) ?? 0) + ms);
+      } else unallocated += ms;
+    }
+    while (index < points.length && points[index].at === at) {
+      const point = points[index++];
+      if (point.delta === 1) {
+        active++;
+        if (point.project) claims.set(point.project, (claims.get(point.project) ?? 0) + 1);
+        else unclaimed++;
+      } else {
+        active--;
+        if (point.project) {
+          const remaining = (claims.get(point.project) ?? 0) - 1;
+          if (remaining > 0) claims.set(point.project, remaining); else claims.delete(point.project);
+        } else unclaimed--;
       }
     }
-    if (uncovered) continue;
-    const ms = end - start;
-    if (claims.size > 1) ambiguous += ms;
-    else if (claims.size === 1 && !unclaimed) projects.set([...claims][0], (projects.get([...claims][0]) ?? 0) + ms);
-    else unallocated += ms;
+    previous = at;
   }
   return { projects, unallocated, ambiguous, total: totalOf(sweep(intervals)) };
 }

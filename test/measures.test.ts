@@ -54,6 +54,20 @@ test("a segment two projects both claim is ambiguous, never split or doubled", (
   expect(part.projects.get("other")).toBeUndefined();
 });
 
+test("the partition stays usable when history grows", () => {
+  // A quadratic partition passed at small sizes and collapsed here: 20,000 windows
+  // took tens of seconds. The bound is generous on purpose — it catches the growth
+  // class, not the constant factor.
+  const windows = Array.from({ length: 20_000 }, (_, i) => ({ start: i * 600_000, end: i * 600_000 + 300_000, project: i % 3 === 0 ? "coral" : undefined }));
+  const started = performance.now();
+  const part = partitionByProject(windows);
+  const elapsed = performance.now() - started;
+  const allocated = [...part.projects.values()].reduce((sum, ms) => sum + ms, 0);
+  expect(allocated + part.unallocated + part.ambiguous).toBe(part.total);
+  expect(part.total).toBe(6_000_000_000); // 20,000 disjoint 300s windows
+  expect(elapsed).toBeLessThan(3_000);
+}, 30_000);
+
 test("a zero-length interval contributes no time", () => {
   expect(totalOf(sweep([{ start: 5, end: 5 }]))).toBe(0);
 });
