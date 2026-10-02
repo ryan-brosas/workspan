@@ -10,7 +10,7 @@ import { socketPath as defaultSocket } from "../daemon/paths.ts";
 import { encodeFrame, parseResponse, PROTOCOL_VERSION, type Method } from "../protocol.ts";
 
 const args = process.argv.slice(2);
-const FLAGS = new Set(["--socket", "--project", "--session", "--file", "--db", "--since-days", "--since-hours", "--limit", "--instance"]);
+const FLAGS = new Set(["--socket", "--project", "--session", "--file", "--db", "--since-days", "--since-hours", "--limit", "--instance", "--turns", "--chunks"]);
 const flag = (name: string): string | undefined => { const at = args.indexOf(name); return at === -1 ? undefined : args[at + 1]; };
 const positional: string[] = [];
 for (let i = 0; i < args.length; i++) {
@@ -61,6 +61,18 @@ async function main(): Promise<number> {
     console.log(JSON.stringify(await request("session.stop", { session: flag("--session") }), null, 2));
     return 0;
   }
+  if (group === "audit") {
+    // Read-only and local: it reads receipt files, classifies them with the Bend
+    // audit lane and reports. Nothing is ingested, so it is safe to run against
+    // real history before any migration is approved.
+    const turns = flag("--turns");
+    const chunks = flag("--chunks");
+    if (!turns || !chunks) throw new Error("audit needs --turns <file.jsonl> and --chunks <file.jsonl>");
+    const { auditReceipts } = await import("../adapters/receipt-audit.ts");
+    const report = auditReceipts({ turnsLog: turns, chunksLog: chunks, ...(flag("--instance") ? { label: flag("--instance")! } : {}) });
+    console.log(JSON.stringify(report, null, 2));
+    return 0;
+  }
   if (group === "ingest-codex") {
     // Reading another application's history is the adapter's job, and it is
     // read-only: no prompts, no item bodies, no error payloads are selected.
@@ -89,7 +101,7 @@ async function main(): Promise<number> {
     console.log(JSON.stringify(await request("ingest", { events }), null, 2));
     return 0;
   }
-  throw new Error("usage: workspan status|engine [--check]|health|ingest --file f.jsonl|ingest-codex [--since-days N] [--dry-run]|session start --project P|session stop --session S");
+  throw new Error("usage: workspan status|engine [--check]|health|ingest --file f.jsonl|ingest-codex [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl|session start --project P|session stop --session S");
 }
 
 main().then(code => process.exit(code)).catch((error: unknown) => {

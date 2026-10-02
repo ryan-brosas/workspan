@@ -19,6 +19,9 @@ bun run build:check && bun run proof:check && bun test && bun run check
 bun src/daemon/main.ts --db /tmp/demo.sqlite --runtime-dir /tmp/demo-run &
 bun src/cli/workspan.ts --socket /tmp/demo-run/workspan.sock session start --project coral
 bun src/cli/workspan.ts --socket /tmp/demo-run/workspan.sock engine --check
+
+# Before any migration: classify existing receipts read-only, importing nothing.
+bun src/cli/workspan.ts audit --turns exports/pi-worktime.jsonl --chunks exports/pi-worktime-chunks.jsonl
 ```
 
 Nothing here imports live history, enables a service or migrates records: the daemon runs only when started by hand, and the adapter reads another application's database read-only. The widget is installed on this machine at `~/.config/omarchy/plugins/workspan.tracker` and is removable with `omarchy plugin remove workspan.tracker`. The existing [pi-time-tracker](../pi-time-tracker/README.md) remains intact and is still the installed tracker. The public repository is <https://github.com/ryan-brosas/workspan>; [packaging/](packaging/README.md) holds a daemon unit that is designed but not installed.

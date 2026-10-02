@@ -83,11 +83,28 @@ law (not the syntax), and deleting a proof turns the law into an open claim
 | Both lanes agree | `test/native.test.ts` runs the generated and native lanes against the same corpus and a seeded coverage oracle, including 1,200 overlapping receipts and 12,000 groups |
 | The engine is identifiable at runtime | `status.json.engine` reports label, `sha256` of the artifact, compiler version read from the artifact header, and the source file names |
 
+## The audit lane
+
+`audit.bend` classifies a receipt against its counted intervals: `consistent`,
+`legacy`, `missing`, `checkpoint-only`, `mismatch` or `conflict`. It is exposed as a
+read-only pre-import check:
+
+```sh
+bun src/cli/workspan.ts audit --turns <turns.jsonl> --chunks <chunks.jsonl>
+```
+
+It groups by scope first — Bend deliberately refuses an audit that spans scopes —
+reports counted evidence per scope, and lists every conflict, mismatch and missing
+receipt for review. Task labels are read only because receipt identity includes
+them; they are interned into a variant index before anything reaches Bend, and the
+report never prints them.
+
 ## Open items
 
-- **The audit lane is not wired to adapters yet.** `auditTurnReceipts` is exercised
-  by tests but nothing calls it in production; receipt reconciliation for imported
-  history is M5 work.
+- **The audit lane now has a real caller**: `workspan audit --turns <file> --chunks <file>`
+  classifies imported receipts read-only, per scope, and imports nothing. What is still
+  open is acting on it — using the classification as the M5 migration gate, and
+  reconciling receipts rather than only reporting them.
 - **The native build cache is named `pi-worktime-native`** in `$XDG_CACHE_HOME`,
   carried over with the inherited `native.ts`. The key is content-addressed, so
   sharing the directory is harmless, but the name is a tracker artefact.
