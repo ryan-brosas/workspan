@@ -146,9 +146,12 @@ export function buildStatus(store: WorkspanStore, options: { idleGapMs: number; 
   }
 
   // Inferred: window evidence from human interaction, policy owned by core/clock.ts.
+  // Attribution uses the window's client label, not its root path: a window knows
+  // which project it belongs to, and the root stays the key a binding is made
+  // against. A clock-written window sets both from the same value.
   const inferred: Attributed[] = windows
     .filter(w => w.kind === "work")
-    .map(w => ({ start: w.start, end: w.end, project: w.root === "" ? undefined : w.root }));
+    .map(w => ({ start: w.start, end: w.end, project: w.client === "" || w.client === "unallocated" ? undefined : w.client }));
 
   // Agent runtime: paired turn evidence. A turn with no end stays open and visible.
   const { intervals: agent, open: openTurns } = agentIntervals(observations);

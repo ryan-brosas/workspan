@@ -10,7 +10,7 @@ import { socketPath as defaultSocket } from "../daemon/paths.ts";
 import { encodeFrame, parseResponse, PROTOCOL_VERSION, type Method } from "../protocol.ts";
 
 const args = process.argv.slice(2);
-const FLAGS = new Set(["--socket", "--project", "--session", "--file", "--db", "--since-days", "--since-hours", "--limit", "--instance", "--turns", "--chunks", "--target", "--map"]);
+const FLAGS = new Set(["--socket", "--project", "--session", "--file", "--db", "--since-days", "--since-hours", "--limit", "--instance", "--turns", "--chunks", "--target", "--map", "--tracker-db"]);
 const flags = (name: string): string[] => {
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) if (args[i] === name && args[i + 1] !== undefined) out.push(args[i + 1]);
@@ -52,6 +52,12 @@ async function main(): Promise<number> {
   const [group, action] = positional;
   if (group === "health") { console.log(JSON.stringify(await request("health"), null, 2)); return 0; }
   if (group === "status") { console.log(JSON.stringify(await request("status"), null, 2)); return 0; }
+  if (group === "projects") {
+    const { bindings } = await request("projects") as { bindings: Array<{ root: string; project: string; explicit: boolean; source: string }> };
+    for (const binding of bindings) console.log(`${binding.explicit ? "explicit " : "provisional"}  ${binding.project.padEnd(28)} ${binding.root}  (${binding.source})`);
+    if (bindings.length === 0) console.log("no project bindings yet");
+    return 0;
+  }
   if (group === "engine") {
     const report = await request("engine") as { engine: Record<string, unknown>; check: { ok: boolean; expected: number; reported: number } };
     console.log(JSON.stringify(report, null, 2));
@@ -98,11 +104,12 @@ async function main(): Promise<number> {
       chunksLog: chunks,
       targetDatabase: target,
       scopeMap,
+      ...(flag("--tracker-db") ? { trackerDatabase: flag("--tracker-db")! } : {}),
       apply: args.includes("--apply"),
       allowLiveDatabase: args.includes("--allow-live-database"),
       ...(flag("--instance") ? { instance: flag("--instance")! } : {}),
     });
-    if (report.reconciliation && !report.reconciliation.equal) {
+    if (report.reconciliation && !(report.reconciliation.agent.equal && report.reconciliation.inferred.equal)) {
       console.error(JSON.stringify(report, null, 2));
       console.error("migration reconciliation failed: imported evidence does not match the source");
       return 1;
@@ -138,7 +145,7 @@ async function main(): Promise<number> {
     console.log(JSON.stringify(await request("ingest", { events }), null, 2));
     return 0;
   }
-  throw new Error("usage: workspan status|engine [--check]|health|ingest --file f.jsonl|ingest-codex [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl [--require-clean]|migrate --chunks f.jsonl --target db [--map scope=project] [--apply]|session start --project P|session stop --session S");
+  throw new Error("usage: workspan status|engine [--check]|health|ingest --file f.jsonl|ingest-codex [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl [--require-clean]|projects|migrate --chunks f.jsonl --target db [--tracker-db pi.sqlite] [--map scope=project] [--apply]|session start --project P|session stop --session S");
 }
 
 main().then(code => process.exit(code)).catch((error: unknown) => {

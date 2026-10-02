@@ -7,7 +7,7 @@ export const PROTOCOL_VERSION = 1;
 /** A single frame is bounded so a malformed or hostile client cannot exhaust the daemon. */
 export const MAX_FRAME_BYTES = 64 * 1024;
 
-export const METHODS = ["health", "ingest", "status", "engine", "session.start", "session.stop"] as const;
+export const METHODS = ["health", "ingest", "status", "engine", "projects", "session.start", "session.stop"] as const;
 export type Method = typeof METHODS[number];
 
 export interface Request { v: number; id: string; method: Method; params?: unknown }

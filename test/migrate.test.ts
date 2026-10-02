@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { appendJsonl, type TurnChunk } from "../src/core/ledger.ts";
 import { migratePiHistory } from "../src/adapters/migrate.ts";
 import { planPiHistory } from "../src/adapters/pi-history.ts";
+import { DatabaseSync } from "node:sqlite";
 import { WorkspanStore } from "../src/daemon/db.ts";
 import { buildStatus } from "../src/daemon/measures.ts";
 
@@ -45,8 +46,14 @@ test("a plan imports nothing and says which evidence is unattributed", () => {
 test("an applied migration reconciles the imported measure against the source", () => {
   const { chunks, target } = fixture();
   const report = migratePiHistory({ chunksLog: chunks, targetDatabase: target, scopeMap: { work: "coral" }, apply: true });
-  expect(report.written).toEqual({ accepted: 12, duplicates: 0, conflicts: 0 });
-  expect(report.reconciliation).toMatchObject({ source_ms: 180_000, target_ms: 180_000, equal: true, identities: 12, open_turns: 0 });
+  expect(report.written).toMatchObject({ accepted: 12, duplicates: 0, conflicts: 0 });
+  expect(report.reconciliation).toMatchObject({
+    agent: { source_ms: 180_000, target_ms: 180_000, equal: true },
+    // No tracker database was given, so no windows were migrated and both sides are zero.
+    inferred: { source_ms: 0, target_ms: 0, equal: true },
+    identities: 12,
+    open_turns: 0,
+  });
 
   // Imported evidence is agent runtime, attributed only where a mapping said so.
   const store = new WorkspanStore(target);
@@ -65,8 +72,8 @@ test("running the migration twice adds nothing and keeps the reconciliation inta
   const { chunks, target } = fixture();
   migratePiHistory({ chunksLog: chunks, targetDatabase: target, scopeMap: { work: "coral" }, apply: true });
   const second = migratePiHistory({ chunksLog: chunks, targetDatabase: target, scopeMap: { work: "coral" }, apply: true });
-  expect(second.written).toEqual({ accepted: 0, duplicates: 12, conflicts: 0 });
-  expect(second.reconciliation).toMatchObject({ source_ms: 180_000, target_ms: 180_000, equal: true });
+  expect(second.written).toMatchObject({ accepted: 0, duplicates: 12, conflicts: 0 });
+  expect(second.reconciliation?.agent).toEqual({ source_ms: 180_000, target_ms: 180_000, equal: true });
 });
 
 test("the daemon's own database is refused unless it is explicitly allowed", () => {
@@ -88,6 +95,61 @@ test("rows the typed reader discards are reported, not inherited silently", () =
   // readChunks drops a reversed row without saying so; the planner counts the loss.
   expect(plan.input).toMatchObject({ chunks: 6, invalid_rows: 1, malformed_lines: 0, skipped: 0 });
   expect(plan.events).toHaveLength(12);
+});
+
+/** The existing tracker's own schema, as installed. */
+function trackerFixture(dir: string): string {
+  const path = join(dir, "pi-tracker.sqlite");
+  const db = new DatabaseSync(path);
+  db.exec(`create table workspaces (root text primary key, client text not null, explicit integer not null default 0);
+    create table windows (id text primary key, root text not null, client text not null, sessionId text not null, task text not null, start integer not null, end integer not null, kind text not null)`);
+  db.prepare("insert into workspaces values(?,?,?)").run("/mnt/ssd/work/project/coral", "coral", 1);
+  db.prepare("insert into workspaces values(?,?,?)").run("/tmp", "tmp", 0);
+  const insert = db.prepare("insert into windows values(?,?,?,?,?,?,?,?)");
+  insert.run("w1", "/mnt/ssd/work/project/coral", "coral", "s1", "invoices", base, base + 600_000, "work");
+  insert.run("w2", "/mnt/ssd/work/project/coral", "coral", "s1", "invoices", base + 300_000, base + 900_000, "work");
+  insert.run("w3", "/tmp", "tmp", "s1", "scratch", base + 3_600_000, base + 3_900_000, "work");
+  // A gap row is the tracker's record of excluded time, so it must not be imported.
+  insert.run("g1", "/mnt/ssd/work/project/coral", "coral", "s1", "invoices", base + 1_200_000, base + 1_800_000, "gap");
+  db.close();
+  return path;
+}
+
+test("the tracker database brings its own attribution, and unconfirmed labels stay marked", () => {
+  const { dir, chunks, target } = fixture();
+  const trackerDatabase = trackerFixture(dir);
+  const plan = migratePiHistory({ chunksLog: chunks, targetDatabase: target, trackerDatabase });
+  expect(plan.applied).toBe(false);
+  expect(plan.tracker).toMatchObject({ bindings: 2, windows: 3, skipped_windows: 0, provisional_projects: ["tmp"] });
+
+  const report = migratePiHistory({ chunksLog: chunks, targetDatabase: target, trackerDatabase, apply: true });
+  expect(report.written).toMatchObject({ windows: 3, bindings: 2, accepted: 12 });
+  // Inferred attendance reconciles: 600s + 300s of overlap -> 900s, plus 300s.
+  expect(report.reconciliation?.inferred).toEqual({ source_ms: 1_200_000, target_ms: 1_200_000, equal: true });
+  expect(report.reconciliation?.agent.equal).toBe(true);
+
+  const store = new WorkspanStore(target);
+  try {
+    const bindings = store.projectBindings();
+    expect(bindings.map(b => [b.project, b.explicit])).toEqual([["coral", true], ["tmp", false]]);
+    const status = buildStatus(store, { idleGapMs: 900_000 });
+    expect(status.measures.inferred.union_ms).toBe(1_200_000);
+    expect(status.measures.inferred.projects).toEqual([{ project: "coral", ms: 900_000 }, { project: "tmp", ms: 300_000 }]);
+    expect(status.measures.inferred.unallocated_ms).toBe(0);
+  } finally { store.close(); }
+});
+
+test("replaying a tracker migration keeps one window row per source window", () => {
+  const { dir, chunks, target } = fixture();
+  const trackerDatabase = trackerFixture(dir);
+  migratePiHistory({ chunksLog: chunks, targetDatabase: target, trackerDatabase, apply: true });
+  migratePiHistory({ chunksLog: chunks, targetDatabase: target, trackerDatabase, apply: true });
+  const store = new WorkspanStore(target);
+  try {
+    expect(store.windows()).toHaveLength(3);
+    expect(store.projectBindings()).toHaveLength(2);
+    expect(store.observations()).toHaveLength(12);
+  } finally { store.close(); }
 });
 
 afterAll(() => { for (const root of roots) rmSync(root, { recursive: true, force: true }); });

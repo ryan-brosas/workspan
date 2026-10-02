@@ -118,6 +118,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         return ok(id, { state: "ok", schema: SCHEMA_VERSION, protocol: PROTOCOL_VERSION, socket: socketFile, status_file: statusFile, database: store.path });
       case "status":
         return ok(id, current());
+      case "projects":
+        return ok(id, { bindings: store.projectBindings() });
       case "engine":
         // The accounting engine, and a live probe through the same call path the
         // measures use, so the numbers are never taken on trust.

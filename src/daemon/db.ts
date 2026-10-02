@@ -16,6 +16,7 @@ export interface Observation extends EvidenceEvent { eventId: string; receivedAt
 export interface SessionRow { id: string; session: string; project: string | null; startedAt: number; endedAt: number | null; state: "running" | "stopped" }
 export interface ConflictRow { eventId: string; reason: string; detectedAt: number }
 export interface SourceHealth { source: string; events: number; cursor: number }
+export interface ProjectBinding { root: string; project: string; explicit: boolean; source: string }
 
 export type IngestResult =
   | { status: "accepted"; eventId: string }
@@ -41,6 +42,9 @@ create table if not exists windows (
 );
 create index if not exists windows_lookup on windows(root, session_id, end);
 create table if not exists source_state (source text primary key, events integer not null, cursor integer not null, updated_at integer not null);
+create table if not exists project_bindings (
+  root text primary key, project text not null, explicit integer not null default 0, source text not null, updated_at integer not null
+);
 `;
 
 export class WorkspanStore implements WindowPort {
@@ -159,6 +163,21 @@ export class WorkspanStore implements WindowPort {
       source: String(row.source), events: Number(row.events), cursor: Number(row.cursor),
     }));
   }
+  /**
+   * Root to project bindings. `explicit` records whether a person confirmed the
+   * client or the label was derived from a directory name: an unconfirmed label is
+   * reported as such instead of being presented as a client someone chose.
+   */
+  bindProject(root: string, project: string, explicit: boolean, source: string): void {
+    this.db.prepare("insert into project_bindings(root, project, explicit, source, updated_at) values(?,?,?,?,?)\n      on conflict(root) do update set project = excluded.project, explicit = excluded.explicit, source = excluded.source, updated_at = excluded.updated_at")
+      .run(root, project, explicit ? 1 : 0, source, Date.now());
+  }
+  projectBindings(): ProjectBinding[] {
+    return (this.db.prepare("select * from project_bindings order by project asc, root asc").all() as Record<string, unknown>[]).map(row => ({
+      root: String(row.root), project: String(row.project), explicit: Number(row.explicit) === 1, source: String(row.source),
+    }));
+  }
+
   close(): void { if (!this.closed) { this.closed = true; this.db.close(); } }
 }
 

@@ -53,8 +53,9 @@ native lane, and the tests asserting the default lane will fail if it is set.
   tool payloads in the database, spools, status file or logs.
 - **Migration never touches the live ledger by accident.** It plans first, imports
   into an explicitly named target, refuses the daemon's own database without an
-  explicit flag, and reports whether the imported measure reconciles with the
-  source. Imported Pi evidence is agent runtime, never attended work and never
+  explicit flag, and reports whether both imported measures reconcile with the
+  source. It imports the tracker's own attribution rather than inventing one, and
+  labels it never confirmed stay marked provisional. Imported Pi evidence is agent runtime, never attended work and never
   attributed to a client that no mapping named.
 - **Uncertainty stays visible.** A stopped daemon, an open turn, a conflict or an
   unallocated segment is reported, never smoothed into a confident number.
