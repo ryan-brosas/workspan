@@ -31,6 +31,8 @@ Panel {
   readonly property color dim: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property bool vertical: bar ? bar.vertical : false
+  // Panel does not provide these; BarWidget does. A widget rooted on Panel owns them.
+  readonly property int barSize: bar ? bar.barSize : Style.bar.sizeHorizontal
 
   // ---------------------------------------------------------------- state
   property var snapshot: null
@@ -108,7 +110,12 @@ Panel {
     id: button
     anchors.fill: parent
     radius: Style.cornerRadius
-    color: root.opened ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12) : "transparent"
+    // A vertical bar is only a couple of characters wide, so the "not writing"
+    // signal cannot rely on a trailing dot that would be clipped: the button
+    // itself carries a faint band whenever the status is not fresh.
+    color: root.opened
+      ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.14)
+      : (root.online ? "transparent" : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.10))
 
     Behavior on color { ColorAnimation { duration: 120 } }
 
@@ -137,7 +144,9 @@ Panel {
       }
 
       Rectangle {
-        visible: !root.online
+        // Geometry decides, not an orientation flag: in a 23px vertical bar the
+        // dot would be clipped, and the tinted band already carries the signal.
+        visible: !root.online && root.width >= Style.space(46)
         width: Style.space(5)
         height: width
         radius: width / 2
