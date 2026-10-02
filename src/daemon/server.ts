@@ -8,7 +8,7 @@ import { AutomaticClock } from "../core/clock.ts";
 import { encodeFrame, fail, ok, parseRequest, PROTOCOL_VERSION, ProtocolError, type Response } from "../protocol.ts";
 import { validateEvent, type EvidenceEvent } from "./evidence.ts";
 import { SCHEMA_VERSION, WorkspanStore, sessionKey, type IngestResult } from "./db.ts";
-import { buildStatus, scopeFor, type Status } from "./measures.ts";
+import { buildStatus, scopeFor, type Status, type StatusCache } from "./measures.ts";
 import { engineInfo, probeEngine } from "./engine.ts";
 import { socketPath as socketPathFor, statusPath } from "./paths.ts";
 
@@ -67,9 +67,12 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   };
 
   const engine = engineInfo();
+  // The projection is held against a watermark, so a periodic refresh pays for a Bend
+  // union only when the evidence actually changed.
+  const projection: StatusCache = {};
   let cached: Status | null = null;
   const refresh = (): Status => {
-    const status = buildStatus(store, { idleGapMs, now: now(), engine });
+    const status = buildStatus(store, { idleGapMs, now: now(), engine, cache: projection });
     cached = status;
     const tmp = `${statusFile}.tmp`;
     writeFileSync(tmp, JSON.stringify(status, null, 2) + "\n", { mode: 0o600 });

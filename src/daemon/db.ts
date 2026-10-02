@@ -68,6 +68,18 @@ export class WorkspanStore implements WindowPort {
   }
 
   /**
+   * Monotonic evidence revision. Every mutation that can change a projection bumps
+   * it, so a derived view can be reused until the evidence actually moves.
+   */
+  revision(): number {
+    const row = this.db.prepare("select value from meta where key = 'revision'").get() as { value: string } | undefined;
+    return Number(row?.value ?? 0);
+  }
+  private bumpRevision(): void {
+    this.db.prepare("insert into meta(key, value) values('revision', '1') on conflict(key) do update set value = cast(cast(value as integer) + 1 as text)").run();
+  }
+
+  /**
    * Accept one observation. Identity decides: an identical replay returns the
    * previous receipt, changed metadata under one identity is recorded as a
    * conflict and leaves the stored observation untouched.
@@ -78,8 +90,13 @@ export class WorkspanStore implements WindowPort {
     const existing = this.db.prepare("select fingerprint from observations where event_id = ?").get(id) as { fingerprint: string } | undefined;
     if (existing) {
       if (existing.fingerprint === print) return { status: "duplicate", eventId: id };
-      this.db.prepare("insert or replace into conflicts(event_id, reason, first_fingerprint, seen_fingerprint, detected_at) values(?,?,?,?,?)")
-        .run(id, "metadata_changed", existing.fingerprint, print, receivedAt);
+      this.db.exec("begin immediate");
+      try {
+        this.db.prepare("insert or replace into conflicts(event_id, reason, first_fingerprint, seen_fingerprint, detected_at) values(?,?,?,?,?)")
+          .run(id, "metadata_changed", existing.fingerprint, print, receivedAt);
+        this.bumpRevision();
+        this.db.exec("commit");
+      } catch (error) { this.db.exec("rollback"); throw error; }
       return { status: "conflict", eventId: id };
     }
     this.db.exec("begin immediate");
@@ -91,6 +108,7 @@ export class WorkspanStore implements WindowPort {
       // The clock writes through this same connection, so an accepted
       // observation and the window it produces commit together.
       effect?.(event);
+      this.bumpRevision();
       this.db.exec("commit");
     } catch (error) {
       this.db.exec("rollback");
@@ -133,6 +151,7 @@ export class WorkspanStore implements WindowPort {
   save(window: ClockWindow): void {
     this.db.prepare("insert into windows(id, root, client, session_id, task, start, end, kind) values(?,?,?,?,?,?,?,?)\n      on conflict(id) do update set start = excluded.start, end = excluded.end, kind = excluded.kind")
       .run(window.id, window.root, window.client, window.sessionId, window.task, window.start, window.end, window.kind);
+    this.bumpRevision();
   }
 
   observations(): Observation[] {
@@ -171,6 +190,7 @@ export class WorkspanStore implements WindowPort {
   bindProject(root: string, project: string, explicit: boolean, source: string): void {
     this.db.prepare("insert into project_bindings(root, project, explicit, source, updated_at) values(?,?,?,?,?)\n      on conflict(root) do update set project = excluded.project, explicit = excluded.explicit, source = excluded.source, updated_at = excluded.updated_at")
       .run(root, project, explicit ? 1 : 0, source, Date.now());
+    this.bumpRevision();
   }
   projectBindings(): ProjectBinding[] {
     return (this.db.prepare("select * from project_bindings order by project asc, root asc").all() as Record<string, unknown>[]).map(row => ({

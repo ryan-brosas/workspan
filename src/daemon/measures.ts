@@ -150,8 +150,37 @@ export function agentIntervals(observations: readonly Observation[]): { interval
   return { intervals, open: starts.size };
 }
 
-export function buildStatus(store: WorkspanStore, options: { idleGapMs: number; now?: number; engine?: EngineInfo }): Status {
-  const now = options.now ?? Date.now();
+/**
+ * The expensive half of a status: everything derived from the evidence and the
+ * policy, and nothing derived from the clock. Recomputing it costs a Bend union
+ * over every interval — hundreds of milliseconds at a few thousand windows — while
+ * the live fields cost nothing, so the two are separated and the projection is held
+ * against a watermark, as the architecture specifies for derived views.
+ */
+interface Projection {
+  measures: Record<MeasureName, MeasureStatus>;
+  coverage: Status["coverage"];
+  /** Cached without the provisional duration, which is a function of the current time. */
+  session: { id: string; session: string; project: string | null; started_at: number } | null;
+  observations: number;
+  conflicts: number;
+}
+
+/** Caller-owned cache slot, so the projection is not module state. */
+export interface StatusCache {
+  key?: string;
+  /** Recomputation count: a cache hit leaves it unchanged, which a test can assert. */
+  builds?: number;
+  projection?: Projection;
+}
+
+/** Evidence revision, policy identity and idle policy: everything the projection depends on. */
+function projectionKey(store: WorkspanStore, options: { idleGapMs: number; engine?: EngineInfo }): string {
+  const engine = options.engine ? options.engine.label + "/" + (options.engine.digest ?? "none") : "none";
+  return store.revision() + "|" + options.idleGapMs + "|" + engine;
+}
+
+function computeProjection(store: WorkspanStore, options: { idleGapMs: number }): Projection {
   const observations = store.observations();
   const windows = store.windows();
   const sessions = store.sessionRows();
@@ -160,11 +189,11 @@ export function buildStatus(store: WorkspanStore, options: { idleGapMs: number; 
   // Attested: only user-stated intervals. A running session is provisional.
   const attested: Attributed[] = [];
   let openSessions = 0;
-  let current: Status["current_session"] = null;
+  let current: Projection["session"] = null;
   for (const row of sessions) {
     if (row.endedAt === null) {
       openSessions++;
-      current = { id: row.id, session: row.session, project: row.project, started_at: row.startedAt, provisional_ms: Math.max(0, now - row.startedAt) };
+      current = { id: row.id, session: row.session, project: row.project, started_at: row.startedAt };
       continue;
     }
     attested.push({ start: row.startedAt, end: row.endedAt, project: row.project ?? undefined });
@@ -182,14 +211,35 @@ export function buildStatus(store: WorkspanStore, options: { idleGapMs: number; 
   const { intervals: agent, open: openTurns } = agentIntervals(observations);
 
   return {
+    measures: { attested: measure(attested), inferred: measure(inferred), agent: measure(agent) },
+    coverage: { events: observations.length, conflicts: conflicts.length, open_agent_turns: openTurns, open_sessions: openSessions, sources: store.sources() },
+    session: current,
+    observations: observations.length,
+    conflicts: conflicts.length,
+  };
+}
+
+export function buildStatus(store: WorkspanStore, options: { idleGapMs: number; now?: number; engine?: EngineInfo; cache?: StatusCache }): Status {
+  const now = options.now ?? Date.now();
+  const key = options.cache ? projectionKey(store, options) : "";
+  let projection = options.cache?.key === key ? options.cache.projection : undefined;
+  if (!projection) {
+    projection = computeProjection(store, options);
+    if (options.cache) {
+      options.cache.key = key;
+      options.cache.projection = projection;
+      options.cache.builds = (options.cache.builds ?? 0) + 1;
+    }
+  }
+  return {
     schema: 1,
     generated_at: now,
     idle_gap_ms: options.idleGapMs,
     engine: options.engine ?? null,
-    measures: { attested: measure(attested), inferred: measure(inferred), agent: measure(agent) },
-    current_session: current,
-    coverage: { events: observations.length, conflicts: conflicts.length, open_agent_turns: openTurns, open_sessions: openSessions, sources: store.sources() },
-    watermark: { observations: observations.length, conflicts: conflicts.length },
+    measures: projection.measures,
+    current_session: projection.session ? { ...projection.session, provisional_ms: Math.max(0, now - projection.session.started_at) } : null,
+    coverage: projection.coverage,
+    watermark: { observations: projection.observations, conflicts: projection.conflicts },
     non_additive: NON_ADDITIVE_NOTE,
   };
 }

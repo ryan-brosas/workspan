@@ -57,6 +57,10 @@ native lane, and the tests asserting the default lane will fail if it is set.
   source. It imports the tracker's own attribution rather than inventing one, and
   labels it never confirmed stay marked provisional. Imported Pi evidence is agent runtime, never attended work and never
   attributed to a client that no mapping named.
+- **Derived views are cached against a watermark, never against the clock.** A
+  projection is reused until evidence, policy or the idle gap changes; the live
+  fields — generation time and a provisional session duration — are recomputed on
+  every read. Caching them would freeze the timer.
 - **Uncertainty stays visible.** A stopped daemon, an open turn, a conflict or an
   unallocated segment is reported, never smoothed into a confident number.
 
