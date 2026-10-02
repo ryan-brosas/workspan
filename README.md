@@ -6,7 +6,15 @@ Workspan is the proposed independent successor to the Pi-only time-tracking inte
 
 ## Current state
 
-This repository holds a project brief and research handoff, not a runnable application. No service, plugin, connector, or migration has been implemented or installed here. The existing [pi-time-tracker](../pi-time-tracker/README.md) remains intact and is still the installed implementation. The public repository is <https://github.com/ryan-brosas/workspan>; [packaging/](packaging/README.md) holds a daemon unit that is designed but not installed.
+The local vertical slice exists: an inherited accounting core (`src/core/`, see [docs/provenance.md](docs/provenance.md)), a single-writer daemon over a private Unix socket, a CLI, and the `status.json` the desktop plugin will watch. It runs today against a fixture database and synthetic evidence:
+
+```sh
+bun src/daemon/main.ts --db /tmp/demo.sqlite --runtime-dir /tmp/demo-run &
+bun src/cli/workspan.ts --socket /tmp/demo-run/workspan.sock session start --project coral
+bun src/cli/workspan.ts --socket /tmp/demo-run/workspan.sock status
+```
+
+No service, plugin, live-history import or migration is installed or enabled here. The existing [pi-time-tracker](../pi-time-tracker/README.md) remains intact and is still the installed tracker. The public repository is <https://github.com/ryan-brosas/workspan>; [packaging/](packaging/README.md) holds a daemon unit that is designed but not installed.
 
 ## Architecture and source research
 
