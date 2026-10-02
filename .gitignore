@@ -3,6 +3,8 @@
 /coverage/
 /.cache/
 /runtime/
+target/
+/crates/*/target/
 /exports/
 *.sqlite
 *.sqlite-shm

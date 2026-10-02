@@ -1,0 +1,16 @@
+[package]
+name = "workspan-collector"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "Native desktop capability probe and coarse presence collector for Workspan."
+
+# Kept deliberately small: a collector that reads one compositor's metadata should not
+# pull a runtime of its own.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+strip = true

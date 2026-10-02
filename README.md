@@ -6,7 +6,7 @@ Workspan is the proposed independent successor to the Pi-only time-tracking inte
 
 ## Current state
 
-The local vertical slice exists and runs: an inherited Bend accounting core (`src/core/`, see [docs/bend.md](docs/bend.md) and [docs/provenance.md](docs/provenance.md)), a single-writer daemon over a private Unix socket, a CLI, a read-only local Codex adapter, and an Omarchy bar widget that reads the status file the daemon writes.
+The local vertical slice exists and runs: an inherited Bend accounting core (`src/core/`, see [docs/bend.md](docs/bend.md) and [docs/provenance.md](docs/provenance.md)), a single-writer daemon over a private Unix socket, a CLI, a read-only local Codex adapter, and an Omarchy bar widget that reads the status file the daemon writes. A Rust collector handles the desktop boundary ([docs/collector.md](docs/collector.md)): it probes which native signals this host offers, and emits coarse presence events that annotate coverage without ever becoming hours.
 
 ```sh
 # The gates. Bend needs its pinned toolchain (never BEND_EXECUTABLE: that selects

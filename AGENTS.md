@@ -45,6 +45,10 @@ native lane, and the tests asserting the default lane will fail if it is set.
 - **Inherited policy is not casually edited.** `src/core/*.bend` and
   `generated/policy.mjs` are inherited and pinned by digest. Changing a
   classification rule means changing the laws and the proof gate with it.
+- **Presence is not attendance.** Desktop signals are annotations: they arrive with
+  origin `unknown`, they never become inferred work, and a missing capability is
+  reported as unavailable rather than as zero activity. The collector reads coarse
+  fields only — never titles, descriptions, tags, URLs, keystrokes or the clipboard.
 - **Nothing stores content.** No prompts, replies, titles, URLs, credentials or
   tool payloads in the database, spools, status file or logs.
 - **Migration never touches the live ledger by accident.** It plans first, imports
