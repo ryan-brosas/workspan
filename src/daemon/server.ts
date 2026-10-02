@@ -9,6 +9,7 @@ import { encodeFrame, fail, ok, parseRequest, PROTOCOL_VERSION, ProtocolError, t
 import { validateEvent, type EvidenceEvent } from "./evidence.ts";
 import { SCHEMA_VERSION, WorkspanStore, sessionKey, type IngestResult } from "./db.ts";
 import { buildStatus, scopeFor, type Status } from "./measures.ts";
+import { engineInfo, probeEngine } from "./engine.ts";
 import { socketPath as socketPathFor, statusPath } from "./paths.ts";
 
 const MAX_ERROR_CHARS = 200;
@@ -17,7 +18,18 @@ const bounded = (error: unknown): string => {
   return message.length > MAX_ERROR_CHARS ? `${message.slice(0, MAX_ERROR_CHARS)}…` : message;
 };
 
-export interface DaemonOptions { store: WorkspanStore; runtimeDir: string; idleGapMs?: number; now?: () => number }
+export interface DaemonOptions {
+  store: WorkspanStore;
+  runtimeDir: string;
+  idleGapMs?: number;
+  now?: () => number;
+  /**
+   * How often the status file is re-materialized even when nothing changed. The
+   * file doubles as a liveness signal: without this, a quiet tracker reads as
+   * offline after a minute and an open session's provisional time stops ticking.
+   */
+  statusIntervalMs?: number;
+}
 export interface Daemon { socketPath: string; statusPath: string; status(): Status; close(): Promise<void> }
 
 /** Refuse to clobber a live daemon: only unlink a socket nobody answers on. */
@@ -54,9 +66,10 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     return clock;
   };
 
+  const engine = engineInfo();
   let cached: Status | null = null;
   const refresh = (): Status => {
-    const status = buildStatus(store, { idleGapMs, now: now() });
+    const status = buildStatus(store, { idleGapMs, now: now(), engine });
     cached = status;
     const tmp = `${statusFile}.tmp`;
     writeFileSync(tmp, JSON.stringify(status, null, 2) + "\n", { mode: 0o600 });
@@ -105,6 +118,10 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         return ok(id, { state: "ok", schema: SCHEMA_VERSION, protocol: PROTOCOL_VERSION, socket: socketFile, status_file: statusFile, database: store.path });
       case "status":
         return ok(id, current());
+      case "engine":
+        // The accounting engine, and a live probe through the same call path the
+        // measures use, so the numbers are never taken on trust.
+        return ok(id, { engine, check: probeEngine() });
       case "ingest":
         return ok(id, ingestAll(params));
       case "session.start": {
@@ -158,11 +175,16 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   });
   refresh();
 
+  const statusIntervalMs = Math.max(1_000, options.statusIntervalMs ?? 15_000);
+  const heartbeat = setInterval(() => { try { refresh(); } catch { /* a failed tick must not kill the daemon */ } }, statusIntervalMs);
+  heartbeat.unref?.();
+
   return {
     socketPath: socketFile,
     statusPath: statusFile,
     status: current,
     close: async () => {
+      clearInterval(heartbeat);
       await new Promise<void>(resolve => server.close(() => resolve()));
       rmSync(socketFile, { force: true });
       store.close();

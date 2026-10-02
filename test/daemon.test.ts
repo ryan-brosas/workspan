@@ -62,6 +62,13 @@ test("the daemon accepts, replays and reports through the real CLI", async () =>
   expect(status.non_additive).toContain("never added together");
   expect(status).not.toHaveProperty("total_ms");
 
+  // The bar and popup can say which engine did the arithmetic.
+  expect(status.engine?.label).toBe("generated Bend policy");
+  expect(status.engine?.native).toBe(false);
+  expect(status.engine?.version).toBe("2.0.31");
+  expect(status.engine?.digest).toMatch(/^[0-9a-f]{64}$/);
+  expect(status.engine?.sources).toEqual(["audit.bend", "batch.bend", "engine.bend"]);
+
   // The desktop path: the status file the shell plugin watches.
   expect(readStatusFile(runtimeDir).measures.inferred.union_ms).toBe(status.measures.inferred.union_ms);
   expect(JSON.parse(readFileSync(join(runtimeDir, "status.json"), "utf8")).schema).toBe(1);
@@ -100,6 +107,17 @@ test("a conflict is visible in the materialized status, not only in the receipt"
   expect(readStatusFile(runtimeDir).coverage.conflicts).toBe(1);
   // The stored hours keep their original client.
   expect(status.measures.inferred.projects).toEqual([{ project: "coral", ms: 300_000 }]);
+});
+
+test("the status file stays fresh while the daemon is alive", async () => {
+  setup();
+  // The heartbeat is what makes the file a liveness signal rather than a record
+  // of the last time something happened.
+  const onDisk = readStatusFile(runtimeDir).generated_at;
+  expect(Date.now() - onDisk).toBeLessThan(30_000);
+  await new Promise(resolve => setTimeout(resolve, 1_100));
+  const again = readStatusFile(runtimeDir).generated_at;
+  expect(again).toBeGreaterThanOrEqual(onDisk);
 });
 
 test("a second daemon refuses to take over a live socket", async () => {
