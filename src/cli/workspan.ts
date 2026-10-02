@@ -10,7 +10,7 @@ import { socketPath as defaultSocket } from "../daemon/paths.ts";
 import { encodeFrame, parseResponse, PROTOCOL_VERSION, type Method } from "../protocol.ts";
 
 const args = process.argv.slice(2);
-const FLAGS = new Set(["--socket", "--project", "--session", "--file"]);
+const FLAGS = new Set(["--socket", "--project", "--session", "--file", "--db", "--since-days", "--since-hours", "--limit", "--instance"]);
 const flag = (name: string): string | undefined => { const at = args.indexOf(name); return at === -1 ? undefined : args[at + 1]; };
 const positional: string[] = [];
 for (let i = 0; i < args.length; i++) {
@@ -55,6 +55,27 @@ async function main(): Promise<number> {
     console.log(JSON.stringify(await request("session.stop", { session: flag("--session") }), null, 2));
     return 0;
   }
+  if (group === "ingest-codex") {
+    // Reading another application's history is the adapter's job, and it is
+    // read-only: no prompts, no item bodies, no error payloads are selected.
+    const { collectCodexEvents } = await import("../adapters/codex.ts");
+    const days = Number(flag("--since-days") ?? NaN);
+    const hours = Number(flag("--since-hours") ?? NaN);
+    const windowMs = Number.isFinite(days) ? days * 86_400_000 : (Number.isFinite(hours) ? hours * 3_600_000 : 86_400_000);
+    const collected = collectCodexEvents({
+      sinceMs: Date.now() - windowMs,
+      limit: Number.isFinite(Number(flag("--limit"))) ? Number(flag("--limit")) : 5000,
+      ...(flag("--db") ? { dbPath: flag("--db")! } : {}),
+      ...(flag("--instance") ? { instance: flag("--instance")! } : {}),
+    });
+    if (args.includes("--dry-run")) {
+      console.log(JSON.stringify({ ...collected.summary, dry_run: true, ingested: 0 }, null, 2));
+      return 0;
+    }
+    const result = await request("ingest", { events: collected.events });
+    console.log(JSON.stringify({ read: collected.summary, ingest: result }, null, 2));
+    return 0;
+  }
   if (group === "ingest") {
     const file = flag("--file");
     if (!file) throw new Error("ingest needs --file <jsonl>");
@@ -62,7 +83,7 @@ async function main(): Promise<number> {
     console.log(JSON.stringify(await request("ingest", { events }), null, 2));
     return 0;
   }
-  throw new Error("usage: workspan status|health|ingest --file f.jsonl|session start --project P|session stop --session S");
+  throw new Error("usage: workspan status|health|ingest --file f.jsonl|ingest-codex [--since-days N] [--dry-run]|session start --project P|session stop --session S");
 }
 
 main().then(code => process.exit(code)).catch((error: unknown) => {
