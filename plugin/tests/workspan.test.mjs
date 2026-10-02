@@ -6,7 +6,7 @@ import vm from "node:vm"
 // explicit export list so the same source is testable without QML.
 const source = fs.readFileSync(new URL("../Workspan.js", import.meta.url), "utf8")
   .replace(/^\.pragma library\s*/, "")
-  + "\nmodule.exports = { NON_ADDITIVE, expandPath, parseStatus, measure, formatDuration, formatClock, barLabel, ageSeconds, staleness, isOffline, displayRows, projectLines, warnings, sessionLine, tooltip, shortMessage }\n"
+  + "\nmodule.exports = { NON_ADDITIVE, expandPath, parseStatus, measure, formatDuration, formatClock, barLabel, ageSeconds, staleness, isOffline, displayRows, projectLines, warnings, sessionLine, tooltip, shortMessage, engineLine }\n"
 const sandbox = { module: { exports: {} }, isFinite, Number, Math, JSON, String, Array, Object }
 vm.runInNewContext(source, sandbox, { filename: "Workspan.js" })
 const W = sandbox.module.exports
@@ -77,6 +77,13 @@ assert.match(W.tooltip(null, NOW, 30), /no status file/)
 assert.match(W.tooltip({ ...status, generated_at: NOW - 10 * 60_000 }, NOW, 30), /daemon not writing/)
 assert.match(W.tooltip(status, NOW, 30), /never added together/)
 assert.match(W.NON_ADDITIVE, /never added together/)
+
+// The popup says which engine did the arithmetic.
+assert.equal(W.engineLine(status), "")
+const withEngine = { ...status, engine: { label: "generated Bend policy", native: false, version: "2.0.31", digest: "144316b726023c9e320fce225345680441fb2dbc0ea1cc623c111b129ca524a9" } }
+assert.equal(W.engineLine(withEngine), "Bend 2.0.31 - generated policy - 144316b7 - gap 15m")
+assert.equal(W.engineLine({ ...withEngine, engine: { ...withEngine.engine, native: true } }), "Bend 2.0.31 - native lane - 144316b7 - gap 15m")
+assert.equal(W.engineLine({ ...status, engine: { label: "native Bend", native: true } }), "native lane - gap 15m")
 assert.equal(W.shortMessage("error: nope\nmore"), "error: nope")
 assert.equal(W.shortMessage("x".repeat(300)).length, 163)
 

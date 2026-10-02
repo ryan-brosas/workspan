@@ -104,6 +104,21 @@ function displayRows(status) {
   return rows
 }
 
+/**
+ * Which engine produced these numbers. The arithmetic is Bend policy; saying so
+ * is the difference between a number you can audit and a number you trust.
+ */
+function engineLine(status) {
+  var engine = status ? status.engine : null
+  if (!engine || !engine.label) return ""
+  var parts = []
+  if (engine.version) parts.push("Bend " + String(engine.version))
+  parts.push(engine.native ? "native lane" : "generated policy")
+  if (engine.digest) parts.push(String(engine.digest).slice(0, 8))
+  parts.push("gap " + Math.round(number(status.idle_gap_ms) / 60000) + "m")
+  return parts.join(" - ")
+}
+
 /** One line per thing the user must look at; empty means nothing needs review. */
 function warnings(status) {
   if (!status) return ["No status yet. Start the daemon: workspan daemon"]

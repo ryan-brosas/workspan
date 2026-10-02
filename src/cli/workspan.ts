@@ -47,6 +47,12 @@ async function main(): Promise<number> {
   const [group, action] = positional;
   if (group === "health") { console.log(JSON.stringify(await request("health"), null, 2)); return 0; }
   if (group === "status") { console.log(JSON.stringify(await request("status"), null, 2)); return 0; }
+  if (group === "engine") {
+    const report = await request("engine") as { engine: Record<string, unknown>; check: { ok: boolean; expected: number; reported: number } };
+    console.log(JSON.stringify(report, null, 2));
+    if (args.includes("--check") && !report.check.ok) return 1;
+    return 0;
+  }
   if (group === "session" && action === "start") {
     console.log(JSON.stringify(await request("session.start", { project: flag("--project") }), null, 2));
     return 0;
@@ -83,7 +89,7 @@ async function main(): Promise<number> {
     console.log(JSON.stringify(await request("ingest", { events }), null, 2));
     return 0;
   }
-  throw new Error("usage: workspan status|health|ingest --file f.jsonl|ingest-codex [--since-days N] [--dry-run]|session start --project P|session stop --session S");
+  throw new Error("usage: workspan status|engine [--check]|health|ingest --file f.jsonl|ingest-codex [--since-days N] [--dry-run]|session start --project P|session stop --session S");
 }
 
 main().then(code => process.exit(code)).catch((error: unknown) => {

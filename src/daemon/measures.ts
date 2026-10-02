@@ -5,6 +5,7 @@
 import { reconcileIntervals } from "../core/native.ts";
 import type { Interval } from "../core/ledger.ts";
 import { clockScope, type WorkspanStore } from "./db.ts";
+import type { EngineInfo } from "./engine.ts";
 
 export const MEASURES = ["attested", "inferred", "agent"] as const;
 export type MeasureName = typeof MEASURES[number];
@@ -87,6 +88,8 @@ export interface Status {
   schema: 1;
   generated_at: number;
   idle_gap_ms: number;
+  /** Which accounting engine produced these numbers, and what it is. */
+  engine: EngineInfo | null;
   measures: Record<MeasureName, MeasureStatus>;
   /** `id` is the internal key; `session` is what session.stop takes back. */
   current_session: { id: string; session: string; project: string | null; started_at: number; provisional_ms: number } | null;
@@ -101,7 +104,7 @@ export interface Status {
   non_additive: string;
 }
 
-export function buildStatus(store: WorkspanStore, options: { idleGapMs: number; now?: number }): Status {
+export function buildStatus(store: WorkspanStore, options: { idleGapMs: number; now?: number; engine?: EngineInfo }): Status {
   const now = options.now ?? Date.now();
   const observations = store.observations();
   const windows = store.windows();
@@ -146,6 +149,7 @@ export function buildStatus(store: WorkspanStore, options: { idleGapMs: number; 
     schema: 1,
     generated_at: now,
     idle_gap_ms: options.idleGapMs,
+    engine: options.engine ?? null,
     measures: { attested: measure(attested), inferred: measure(inferred), agent: measure(agent) },
     current_session: current,
     coverage: { events: observations.length, conflicts: conflicts.length, open_agent_turns: openTurns, open_sessions: openSessions, sources: store.sources() },

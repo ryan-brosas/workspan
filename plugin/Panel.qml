@@ -49,6 +49,19 @@ Panel {
   implicitWidth: vertical ? barSize : Math.max(barSize, barRow.implicitWidth + Style.space(12))
   implicitHeight: barSize
 
+  // A popup is owned by the bar's popout coordinator: without registering it on
+  // open, the surface is created and immediately released again. This mirrors the
+  // working third-party widget (carlotran4.herdr).
+  function open() {
+    controller.show()
+    if (bar && typeof bar.requestPopout === "function") bar.requestPopout(root)
+  }
+
+  function close() {
+    controller.hide()
+    if (bar && typeof bar.releasePopout === "function") bar.releasePopout(root)
+  }
+
   function refreshNow() { statusView.reload() }
 
   // Commands are an argv array: no shell text is interpolated, and the plugin
@@ -181,8 +194,10 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: fittedContentWidth(Style.space(340))
-    contentHeight: fittedContentHeight(panelContent.implicitHeight, Style.space(620))
+    // Qualified by id, as the first-party panel does: unqualified calls in this
+    // binding do not resolve and leave the card at its default size.
+    contentWidth: panel.fittedContentWidth(Style.space(340))
+    contentHeight: panel.fittedContentHeight(panelContent.implicitHeight, Style.space(620))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -296,6 +311,16 @@ Panel {
               font.pixelSize: Style.font.caption
               width: parent.width
               wrapMode: Text.WordWrap
+            }
+
+            Text {
+              visible: Workspan.engineLine(root.snapshot) !== ""
+              text: Workspan.engineLine(root.snapshot)
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              width: parent.width
+              elide: Text.ElideRight
             }
 
             Repeater {
