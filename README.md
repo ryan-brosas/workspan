@@ -6,7 +6,7 @@ Workspan is the proposed independent successor to the Pi-only time-tracking inte
 
 ## Current state
 
-This folder is a project brief and research handoff, not a runnable application. No service, plugin, connector, or migration has been implemented or installed here. The existing [pi-time-tracker](../pi-time-tracker/README.md) remains intact and is still the installed implementation. No Git remote or publication has been created for Workspan.
+This repository holds a project brief and research handoff, not a runnable application. No service, plugin, connector, or migration has been implemented or installed here. The existing [pi-time-tracker](../pi-time-tracker/README.md) remains intact and is still the installed implementation. The public repository is <https://github.com/ryan-brosas/workspan>; [packaging/](packaging/README.md) holds a daemon unit that is designed but not installed.
 
 ## Architecture and source research
 

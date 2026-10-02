@@ -1,0 +1,64 @@
+# Workspan local work-time daemon — designed, NOT installed.
+#
+# This file is a specification of the daemon's launch contract, not a deployment.
+# Nothing in the repository installs, enables or starts it: creating this file
+# changes nothing on the machine.
+#
+# Installing it is a separate, explicitly approved step (see packaging/README.md):
+#     install -Dm644 packaging/workspan.service ~/.config/systemd/user/workspan.service
+#     systemctl --user daemon-reload
+#     systemctl --user enable --now workspan.service
+#
+# Milestone 1 runs the daemon in the foreground instead.
+
+[Unit]
+Description=Workspan local work-time daemon
+Documentation=https://github.com/ryan-brosas/workspan
+# The desktop side owns the session; the daemon only needs the user manager.
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=exec
+# Install the CLI on PATH-for-the-manager (a user bin directory), not relative to
+# the checkout: the unit must survive moving or deleting the source tree.
+ExecStart=%h/.local/bin/workspan daemon --foreground
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=10
+
+# State and socket locations are the daemon's own defaults, restated here so the
+# whole contract is visible in one place. %S = $XDG_STATE_HOME, %t = $XDG_RUNTIME_DIR.
+Environment=WORKSPAN_DB_PATH=%S/workspan/workspan.sqlite
+Environment=WORKSPAN_RUNTIME_DIR=%t/workspan
+StateDirectory=workspan
+StateDirectoryMode=0700
+RuntimeDirectory=workspan
+RuntimeDirectoryMode=0700
+
+# ---------------------------------------------------------------------------
+# Sandboxing. The daemon serves one Unix socket and writes its own state; it has
+# no network role and needs no privileges.
+# ---------------------------------------------------------------------------
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+# Nothing under $HOME is read except the state directory below — this hides
+# ~/.ssh, ~/.codex and browser profiles from the daemon by construction.
+ProtectHome=read-only
+ReadWritePaths=%S/workspan %t/workspan
+# No AF_INET/AF_INET6: a Unix socket needs AF_UNIX and nothing else.
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# MemoryDenyWriteExecute is deliberately NOT set: the daemon runs on a V8/Node
+# runtime whose JIT needs writable-executable pages.
+#
+# First-install check (not yet run): confirm the daemon can still write
+# %S/workspan while ProtectHome=read-only is active, and that the plugin sees
+# status.json disappear when the service stops (RuntimeDirectory is cleaned up).
+
+[Install]
+WantedBy=graphical-session.target
