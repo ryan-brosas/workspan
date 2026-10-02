@@ -9,6 +9,8 @@
   "scripts": {
     "test": "bun test",
     "check": "tsc --noEmit",
+    "build:bend": "bun scripts/build-bend.mjs",
+    "build:check": "bun run build:bend --check",
     "daemon": "bun src/daemon/main.ts",
     "workspan": "bun src/cli/workspan.ts"
   },

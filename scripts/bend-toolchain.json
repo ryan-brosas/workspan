@@ -1,0 +1,8 @@
+{
+  "version": "2.0.31",
+  "binaryUrl": "https://github.com/bendlang/bend/releases/download/v2.0.31/bend-2.0.31-linux-x64.tar.gz",
+  "binarySha256": "f7dbecc8ef5991fe15d9953b8b33911bc62a120c735e2e5902aa031e22055bad",
+  "sourceUrl": "https://codeload.github.com/bendlang/bend/tar.gz/1e80ddce5940c9db8fe914f4b13a1f85a0e45b2b",
+  "sourceRevision": "1e80ddce5940c9db8fe914f4b13a1f85a0e45b2b",
+  "sourceSha256": "989ba7787219e8803af37694b5cb16c343dae87bf8a8950e8471867d6ef1c94a"
+}
