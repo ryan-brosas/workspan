@@ -13,7 +13,7 @@ import { eventId, fingerprint, type EvidenceEvent, type Kind, type Origin } from
 export const SCHEMA_VERSION = 1;
 
 export interface Observation extends EvidenceEvent { eventId: string; receivedAt: number }
-export interface SessionRow { id: string; session: string; project: string | null; startedAt: number; endedAt: number | null; state: "running" | "paused" | "stopped" }
+export interface SessionRow { id: string; session: string; project: string | null; root: string | null; startedAt: number; endedAt: number | null; state: "running" | "paused" | "stopped" }
 export interface SessionTransition { sessionId: string; kind: "pause" | "resume"; at: number }
 export interface ConflictRow { eventId: string; reason: string; detectedAt: number }
 export interface SourceHealth { source: string; events: number; cursor: number }
@@ -35,7 +35,7 @@ create table if not exists conflicts (
   event_id text primary key, reason text not null, first_fingerprint text not null, seen_fingerprint text not null, detected_at integer not null
 );
 create table if not exists sessions (
-  id text primary key, source_session text not null, project text, started_at integer not null, ended_at integer, state text not null
+  id text primary key, source_session text not null, project text, root text, started_at integer not null, ended_at integer, state text not null
 );
 create table if not exists session_transitions (
   session_id text not null, kind text not null, at integer not null
@@ -71,6 +71,7 @@ export class WorkspanStore implements WindowPort {
     // A database created before evidence carried a root gains the column rather than
     // being rebuilt: a ledger must survive its own schema learning.
     try { this.db.exec("alter table observations add column root text"); } catch { /* already present */ }
+    try { this.db.exec("alter table sessions add column root text"); } catch { /* already present */ }
     this.db.prepare("insert or ignore into meta(key, value) values('schema_version', ?)").run(String(SCHEMA_VERSION));
   }
 
@@ -129,8 +130,8 @@ export class WorkspanStore implements WindowPort {
     if (event.kind === "session-start") {
       const id = sessionKey(event);
       const row = this.db.prepare("select started_at from sessions where id = ?").get(id) as { started_at: number } | undefined;
-      if (!row) this.db.prepare("insert into sessions(id, source_session, project, started_at, ended_at, state) values(?,?,?,?,null,'running')")
-        .run(id, event.session, event.project ?? null, event.at);
+      if (!row) this.db.prepare("insert into sessions(id, source_session, project, root, started_at, ended_at, state) values(?,?,?,?,?,null,'running')")
+        .run(id, event.session, event.project ?? null, event.root ?? null, event.at);
       return;
     }
     if (event.kind === "session-stop") {
@@ -260,6 +261,7 @@ export function clockScope(attribution: { root?: string; project?: string }, ses
 function sessionRow(row: Record<string, unknown>): SessionRow {
   return {
     id: String(row.id), session: String(row.source_session), project: row.project === null || row.project === undefined ? null : String(row.project),
+    root: row.root === null || row.root === undefined ? null : String(row.root),
     startedAt: Number(row.started_at), endedAt: row.ended_at === null || row.ended_at === undefined ? null : Number(row.ended_at),
     state: String(row.state) as SessionRow["state"],
   };

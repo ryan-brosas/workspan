@@ -117,7 +117,7 @@ export interface Status {
   engine: EngineInfo | null;
   measures: Record<MeasureName, MeasureStatus>;
   /** `id` is the internal key; `session` is what session.stop takes back. */
-  current_session: { id: string; session: string; project: string | null; started_at: number; state: "running" | "paused"; paused_ms: number; paused_at: number | null; provisional_ms: number } | null;
+  current_session: { id: string; session: string; project: string | null; root: string | null; started_at: number; state: "running" | "paused"; paused_ms: number; paused_at: number | null; provisional_ms: number } | null;
   coverage: {
     events: number;
     conflicts: number;
@@ -161,7 +161,7 @@ interface Projection {
   measures: Record<MeasureName, MeasureStatus>;
   coverage: Status["coverage"];
   /** Cached without the provisional duration, which is a function of the current time. */
-  session: { id: string; session: string; project: string | null; started_at: number; state: "running" | "paused"; paused_ms: number; paused_at: number | null } | null;
+  session: { id: string; session: string; project: string | null; root: string | null; started_at: number; state: "running" | "paused"; paused_ms: number; paused_at: number | null } | null;
   observations: number;
   conflicts: number;
 }
@@ -235,7 +235,7 @@ function computeProjection(store: WorkspanStore, options: { idleGapMs: number })
     const pausedMs = pausedSpanMs(rowTransitions, openPause ?? Number.MAX_SAFE_INTEGER);
     if (row.endedAt === null) {
       openSessions++;
-      current = { id: row.id, session: row.session, project: row.project, started_at: row.startedAt, state: row.state === "paused" ? "paused" : "running", paused_ms: pausedMs, paused_at: openPause };
+      current = { id: row.id, session: row.session, project: row.project, root: row.root, started_at: row.startedAt, state: row.state === "paused" ? "paused" : "running", paused_ms: pausedMs, paused_at: openPause };
       continue;
     }
     for (const span of activeSpans(row.startedAt, row.endedAt, rowTransitions)) {

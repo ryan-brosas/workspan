@@ -10,7 +10,7 @@ import { socketPath as defaultSocket } from "../daemon/paths.ts";
 import { encodeFrame, parseResponse, PROTOCOL_VERSION, type Method } from "../protocol.ts";
 
 const args = process.argv.slice(2);
-const FLAGS = new Set(["--socket", "--project", "--session", "--file", "--db", "--since-days", "--since-hours", "--limit", "--instance", "--turns", "--chunks", "--target", "--map", "--tracker-db"]);
+const FLAGS = new Set(["--socket", "--project", "--root", "--explicit", "--session", "--file", "--db", "--since-days", "--since-hours", "--limit", "--instance", "--turns", "--chunks", "--target", "--map", "--tracker-db"]);
 const flags = (name: string): string[] => {
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) if (args[i] === name && args[i + 1] !== undefined) out.push(args[i + 1]);
@@ -58,6 +58,14 @@ async function main(): Promise<number> {
     return new Promise<number>(() => undefined);
   }
   if (group === "status") { console.log(JSON.stringify(await request("status"), null, 2)); return 0; }
+  if (group === "projects" && action === "bind") {
+    const root = positional[2];
+    const project = positional[3];
+    if (!root || !project) throw new Error("usage: workspan projects bind <root> <project> [--explicit]");
+    const { bindings } = await request("projects.bind", { root, project, explicit: args.includes("--explicit") }) as { bindings: Array<{ root: string; project: string; explicit: boolean; source: string }> };
+    for (const binding of bindings) console.log(`${binding.explicit ? "explicit " : "provisional"}  ${binding.project.padEnd(28)} ${binding.root}  (${binding.source})`);
+    return 0;
+  }
   if (group === "projects") {
     const { bindings } = await request("projects") as { bindings: Array<{ root: string; project: string; explicit: boolean; source: string }> };
     for (const binding of bindings) console.log(`${binding.explicit ? "explicit " : "provisional"}  ${binding.project.padEnd(28)} ${binding.root}  (${binding.source})`);
@@ -70,14 +78,32 @@ async function main(): Promise<number> {
     if (args.includes("--check") && !report.check.ok) return 1;
     return 0;
   }
+  // An explicit project wins; an explicit root is second best; otherwise the hit
+  // derives the workspace the user is actually in - Herdr's focused pane, then the
+  // focused window's process tree - and the daemon resolves the client from the
+  // binding. Nothing here names a client on its own.
+  const sessionParams = async (): Promise<Record<string, string>> => {
+    const params: Record<string, string> = {};
+    const project = flag("--project");
+    const root = flag("--root");
+    if (project) params.project = project;
+    else if (root) params.root = root;
+    else {
+      const { focusedRoot } = await import("./focused-root.ts");
+      const derived = await focusedRoot();
+      if (derived) params.root = derived;
+    }
+    return params;
+  };
+
   if (group === "session" && action === "start") {
-    console.log(JSON.stringify(await request("session.start", { project: flag("--project") }), null, 2));
+    console.log(JSON.stringify(await request("session.start", await sessionParams()), null, 2));
     return 0;
   }
-  if (group === "session" && action === "toggle") { console.log(JSON.stringify(await request("session.toggle", { project: flag("--project") }), null, 2)); return 0; }
+  if (group === "session" && action === "toggle") { console.log(JSON.stringify(await request("session.toggle", await sessionParams()), null, 2)); return 0; }
   if (group === "session" && action === "pause") { console.log(JSON.stringify(await request("session.pause"), null, 2)); return 0; }
   if (group === "session" && action === "resume") { console.log(JSON.stringify(await request("session.resume"), null, 2)); return 0; }
-  if (group === "session" && action === "switch") { console.log(JSON.stringify(await request("session.switch", { project: flag("--project") }), null, 2)); return 0; }
+  if (group === "session" && action === "switch") { console.log(JSON.stringify(await request("session.switch", await sessionParams()), null, 2)); return 0; }
   if (group === "session" && action === "stop") {
     console.log(JSON.stringify(await request("session.stop", { session: flag("--session") }), null, 2));
     return 0;

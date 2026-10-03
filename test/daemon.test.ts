@@ -147,6 +147,28 @@ test("pause, resume and switch are idempotent and close segments cleanly", async
   expect(after.measures.attested.projects.map(p => p.project).sort()).toEqual(["coral", "other"]);
 });
 
+test("a root-derived session attributes from the binding, never from a hard-coded client", async () => {
+  setup();
+  const bound = "/mnt/ssd/work/project/workspan";
+  const unbound = "/mnt/ssd/work/project/elsewhere";
+  await cli("projects", "bind", bound, "workspan");
+  const started = JSON.parse((await cli("session", "start", "--root", bound)).stdout) as { session: string; project: string | null; root: string | null };
+  expect(started.project).toBe("workspan");
+  expect(started.root).toBe(bound);
+  let status = JSON.parse((await cli("status")).stdout) as { current_session: { project: string | null; root: string | null; provisional_ms: number } | null; measures: { attested: { union_ms: number; projects: Array<{ project: string; ms: number }> } } };
+  expect(status.current_session).toMatchObject({ project: "workspan", root: bound });
+  await cli("session", "stop", "--session", started.session);
+  status = JSON.parse((await cli("status")).stdout) as typeof status;
+  // Earlier tests in this file already closed attested sessions, so assert this
+  // session's own contribution rather than the cumulative union.
+  expect(status.measures.attested.projects.find(p => p.project === "workspan")?.ms).toBeGreaterThan(0);
+
+  // An unbound root stays unallocated: a directory name is not a client.
+  const open = JSON.parse((await cli("session", "start", "--root", unbound)).stdout) as { project: string | null };
+  expect(open.project).toBeNull();
+  await cli("session", "stop");
+});
+
 test("a second daemon refuses to take over a live socket", async () => {
   setup();
   await expect(startDaemon({ store: new WorkspanStore(join(roots[0], "second.sqlite")), runtimeDir, idleGapMs: 900_000 })).rejects.toThrow(/already listening/);

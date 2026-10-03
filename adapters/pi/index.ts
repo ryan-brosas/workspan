@@ -41,15 +41,10 @@ export function isHumanInput(data: string): boolean {
   return !paste.includes("\x1b") && /[^\x00-\x1f\x7f]/u.test(paste);
 }
 
-/** The repository root, or the directory itself when there is no repository. */
-export function repositoryRoot(cwd: string): string {
-  for (let dir = resolve(cwd); ; ) {
-    if (existsSync(join(dir, ".git"))) return dir;
-    const parent = dirname(dir);
-    if (parent === dir) return resolve(cwd);
-    dir = parent;
-  }
-}
+import { repositoryRoot } from "../../src/core/workspace.ts";
+
+/** One walk to a repository root, shared with the CLI's focused-root derivation. */
+export { repositoryRoot } from "../../src/core/workspace.ts";
 
 export function spoolDirectory(): string {
   return join(process.env.XDG_STATE_HOME ?? join(process.env.HOME ?? "/home", ".local", "state"), "workspan");

@@ -109,13 +109,27 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     };
   };
 
-  const manualEvent = (choice: { kind: "session-start" | "session-stop" | "session-pause" | "session-resume"; session?: string; project?: string }, at: number): EvidenceEvent => {
+  /**
+   * An explicit project wins. Otherwise a workspace root resolves through the
+   * bindings - the same rule evidence follows - so a manual hit attributes to
+   * wherever the user is actually working instead of a hard-coded client.
+   */
+  const sessionChoice = (params: unknown): { project?: string; root?: string } => {
+    const value = (params ?? {}) as { project?: unknown; root?: unknown };
+    const root = typeof value.root === "string" && value.root ? value.root : undefined;
+    const explicit = typeof value.project === "string" && value.project ? value.project : undefined;
+    const project = explicit ?? (root ? store.resolveProject(root) : undefined);
+    return { ...(project ? { project } : {}), ...(root ? { root } : {}) };
+  };
+
+  const manualEvent = (choice: { kind: "session-start" | "session-stop" | "session-pause" | "session-resume"; session?: string; project?: string; root?: string }, at: number): EvidenceEvent => {
     return validateEvent({
       v: 1, source: "manual", instance: "cli",
       session: choice.session ?? `s-${at}`,
       event: `${choice.kind}-${at}-${Math.random().toString(36).slice(2, 10)}`,
       kind: choice.kind, at, origin: "attested",
       ...(choice.project ? { project: choice.project } : {}),
+      ...(choice.root ? { root: choice.root } : {}),
     });
   };
 
@@ -127,6 +141,17 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         return ok(id, current());
       case "projects":
         return ok(id, { bindings: store.projectBindings() });
+      case "projects.bind": {
+        // Confirming a binding is an explicit action: it decides where future hours
+        // land, so it is never guessed and never silent.
+        const value = (params ?? {}) as { root?: unknown; project?: unknown; explicit?: unknown };
+        const root = typeof value.root === "string" ? value.root.trim() : "";
+        const project = typeof value.project === "string" ? value.project.trim() : "";
+        if (!root || !project) throw new ProtocolError("bad_request", "bind needs a root and a project");
+        store.bindProject(root, project, value.explicit === true, "cli");
+        refresh();
+        return ok(id, { bindings: store.projectBindings() });
+      }
       case "engine":
         // The accounting engine, and a live probe through the same call path the
         // measures use, so the numbers are never taken on trust.
@@ -136,13 +161,13 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       case "session.start": {
         if (store.openSession()) throw new ProtocolError("session_open", "a session is already running; stop it or use session.switch");
         const at = now();
-        const project = (params as { project?: unknown } | null)?.project as string | undefined;
-        const event = manualEvent({ kind: "session-start", project }, at);
+        const choice = sessionChoice(params);
+        const event = manualEvent({ kind: "session-start", ...choice }, at);
         const receipt = store.ingest(event, at);
         refresh();
         // `session` is the value the caller passes to the other session commands;
         // `key` is the internal identity, for diagnostics only.
-        return ok(id, { receipt, session: event.session, key: sessionKey(event), project: event.project ?? null, started_at: at });
+        return ok(id, { receipt, session: event.session, key: sessionKey(event), project: event.project ?? null, root: event.root ?? null, started_at: at });
       }
       case "session.pause": {
         const open = store.openSession();
@@ -183,25 +208,25 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
           refresh();
           return ok(id, { receipt, action: "stopped", session: open.session });
         }
-        const project = (params as { project?: unknown } | null)?.project as string | undefined;
-        const event = manualEvent({ kind: "session-start", project }, at);
+        const choice = sessionChoice(params);
+        const event = manualEvent({ kind: "session-start", ...choice }, at);
         const receipt = store.ingest(event, at);
         refresh();
-        return ok(id, { receipt, action: "started", session: event.session, project: event.project ?? null });
+        return ok(id, { receipt, action: "started", session: event.session, project: event.project ?? null, root: event.root ?? null });
       }
       case "session.switch": {
         // One call closes the old segment and opens the new one at the same instant:
         // no hour is counted twice, and none is lost in between.
         const at = now();
-        const project = (params as { project?: unknown } | null)?.project as string | undefined;
+        const choice = sessionChoice(params);
         const open = store.openSession();
         const events = [
           ...(open ? [manualEvent({ kind: "session-stop", session: open.session }, at)] : []),
-          manualEvent({ kind: "session-start", session: `s-${at}`, project }, at),
+          manualEvent({ kind: "session-start", session: `s-${at}`, ...choice }, at),
         ];
         const receipts = events.map(event => store.ingest(event, at));
         refresh();
-        return ok(id, { receipts, closed: open ? open.session : null, session: `s-${at}`, project: project ?? null });
+        return ok(id, { receipts, closed: open ? open.session : null, session: `s-${at}`, project: choice.project ?? null, root: choice.root ?? null });
       }
       default:
         throw new ProtocolError("unknown_method", `unknown method ${JSON.stringify(method)}`);
