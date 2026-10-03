@@ -90,20 +90,21 @@ function isOffline(status, nowMs, refreshSeconds) {
   return staleness(status, nowMs, refreshSeconds) !== "fresh"
 }
 
-function projectLines(m, extras) {
-  var lines = m.projects.map(function (row) { return row.project + " " + formatDuration(row.ms) })
-  if (m.unallocatedMs > 0) lines.push("unallocated " + formatDuration(m.unallocatedMs))
-  if (m.ambiguousMs > 0) lines.push("ambiguous " + formatDuration(m.ambiguousMs))
-  return lines.concat(extras || [])
+/** Caveats that belong to a measure but are not projects: unallocated, ambiguous. */
+function measureCaveats(m) {
+  var out = []
+  if (m.unallocatedMs > 0) out.push("unallocated " + formatDuration(m.unallocatedMs))
+  if (m.ambiguousMs > 0) out.push("ambiguous " + formatDuration(m.ambiguousMs))
+  return out
 }
 
-/** Rows for the popup body: one per measure, in a fixed order. */
+/** Rows for the popup body: one measure per row, each project on its own row. */
 function displayRows(status) {
   var specs = [["attested", "Attested session"], ["inferred", "Inferred attended"], ["agent", "Agent runtime"]]
   var rows = []
   for (var i = 0; i < specs.length; i++) {
     var m = measure(status, specs[i][0])
-    rows.push({ key: specs[i][0], label: specs[i][1], value: formatDuration(m.unionMs), projects: projectLines(m, []) })
+    rows.push({ key: specs[i][0], label: specs[i][1], value: formatDuration(m.unionMs), projects: m.projects, caveats: measureCaveats(m) })
   }
   return rows
 }

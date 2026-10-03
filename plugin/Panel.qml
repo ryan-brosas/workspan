@@ -301,9 +301,38 @@ Panel {
                   }
                 }
 
+                // One project per row: a joined line truncates the first project
+                // name it runs out of room for, and every one of them is a client.
+                Repeater {
+                  model: measureRow.modelData.projects
+
+                  Row {
+                    required property var modelData
+                    width: panelContent.width
+                    spacing: Style.space(4)
+
+                    Text {
+                      text: parent.modelData.project
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      width: parent.width - projectMs.implicitWidth
+                      elide: Text.ElideRight
+                    }
+
+                    Text {
+                      id: projectMs
+                      text: Workspan.formatDuration(parent.modelData.ms)
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                  }
+                }
+
                 Text {
-                  visible: measureRow.modelData.projects.length > 0
-                  text: measureRow.modelData.projects.join("   ")
+                  visible: measureRow.modelData.caveats.length > 0
+                  text: measureRow.modelData.caveats.join("   ")
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption

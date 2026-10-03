@@ -103,7 +103,9 @@ function measure(intervals: readonly Attributed[]): MeasureStatus {
   const union = intervals.length === 0 ? 0 : reconcileIntervals([intervals.map(({ start, end }) => ({ start, end }))])[0];
   return {
     union_ms: union,
-    projects: [...part.projects.entries()].map(([project, ms]) => ({ project, ms })).sort((a, b) => b.ms - a.ms || a.project.localeCompare(b.project)),
+    // A zero-duration project is a boundary, not information: keep the totals
+    // honest without listing names that carry no time.
+    projects: [...part.projects.entries()].map(([project, ms]) => ({ project, ms })).filter(row => row.ms > 0).sort((a, b) => b.ms - a.ms || a.project.localeCompare(b.project)),
     unallocated_ms: part.unallocated,
     ambiguous_ms: part.ambiguous,
   };

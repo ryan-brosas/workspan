@@ -6,7 +6,7 @@ import vm from "node:vm"
 // explicit export list so the same source is testable without QML.
 const source = fs.readFileSync(new URL("../Workspan.js", import.meta.url), "utf8")
   .replace(/^\.pragma library\s*/, "")
-  + "\nmodule.exports = { NON_ADDITIVE, expandPath, parseStatus, measure, formatDuration, formatClock, barLabel, ageSeconds, staleness, isOffline, displayRows, projectLines, warnings, sessionLine, tooltip, shortMessage, engineLine }\n"
+  + "\nmodule.exports = { NON_ADDITIVE, expandPath, parseStatus, measure, formatDuration, formatClock, barLabel, ageSeconds, staleness, isOffline, displayRows, measureCaveats, warnings, sessionLine, tooltip, shortMessage, engineLine }\n"
 const sandbox = { module: { exports: {} }, isFinite, Number, Math, JSON, String, Array, Object }
 vm.runInNewContext(source, sandbox, { filename: "Workspan.js" })
 const W = sandbox.module.exports
@@ -75,9 +75,13 @@ assert.deepEqual([...W.warnings(conflicted)], [
 const rows = W.displayRows(status)
 assert.deepEqual([...rows.map(r => r.label)], ["Attested session", "Inferred attended", "Agent runtime"])
 assert.deepEqual([...rows.map(r => r.value)], ["2h 00m", "1h 00m", "4h 00m"])
-assert.deepEqual([...rows[1].projects], ["coral 50m", "other 5m", "unallocated 5m"])
-assert.deepEqual([...rows[0].projects], ["coral 2h 00m"])
+// Values cross the vm realm boundary, so rebuild them in this realm before comparing.
+assert.deepEqual(rows[1].projects.map(p => ({ project: p.project, ms: p.ms })), [{ project: "coral", ms: 3_000_000 }, { project: "other", ms: 300_000 }])
+assert.deepEqual([...rows[1].caveats], ["unallocated 5m"])
+assert.deepEqual(rows[0].projects.map(p => ({ project: p.project, ms: p.ms })), [{ project: "coral", ms: 7_200_000 }])
+assert.deepEqual([...rows[0].caveats], [])
 assert.deepEqual([...W.displayRows(null).map(r => r.value)], ["0m", "0m", "0m"])
+assert.deepEqual([...W.displayRows(null)[0].projects], [])
 
 assert.equal(W.sessionLine(status), "No session running")
 assert.equal(W.sessionLine({ ...status, current_session: { project: null, provisional_ms: 90_000, state: "running" } }), "unallocated - 2m provisional")
