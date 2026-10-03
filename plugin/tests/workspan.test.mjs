@@ -6,7 +6,7 @@ import vm from "node:vm"
 // explicit export list so the same source is testable without QML.
 const source = fs.readFileSync(new URL("../Workspan.js", import.meta.url), "utf8")
   .replace(/^\.pragma library\s*/, "")
-  + "\nmodule.exports = { NON_ADDITIVE, expandPath, parseStatus, measure, formatDuration, formatClock, barLabel, ageSeconds, staleness, isOffline, displayRows, measureCaveats, warnings, sessionLine, tooltip, shortMessage, engineLine }\n"
+  + "\nmodule.exports = { NON_ADDITIVE, expandPath, parseStatus, measure, formatDuration, formatClock, verticalClock, barLabel, barLabelVertical, ageSeconds, staleness, isOffline, displayRows, measureCaveats, warnings, sessionLine, tooltip, shortMessage, engineLine }\n"
 const sandbox = { module: { exports: {} }, isFinite, Number, Math, JSON, String, Array, Object }
 vm.runInNewContext(source, sandbox, { filename: "Workspan.js" })
 const W = sandbox.module.exports
@@ -44,6 +44,7 @@ assert.equal(W.formatClock(9 * 60_000), "9m")
 // The bar never shows a measure sum: 2h attested + 1h inferred + 4h agent is not 7h.
 assert.equal(W.barLabel(status), "2:00")
 assert.equal(W.barLabel(null), "--")
+
 const agentOnly = { ...status, measures: { ...status.measures, attested: { union_ms: 0 }, inferred: { union_ms: 0 } } }
 assert.equal(W.barLabel(agentOnly), "0m")
 
@@ -52,6 +53,16 @@ const running = { ...status, current_session: { project: "coral", provisional_ms
 assert.equal(W.barLabel(running), "1:05")
 const pausedOpen = { ...status, current_session: { project: "coral", provisional_ms: 90_000, state: "paused", paused_at: 90_000 } }
 assert.equal(W.barLabel(pausedOpen), "2m")
+
+// The vertical bar stacks the timer the way the stock clock stacks its lines.
+assert.equal(W.verticalClock(65 * 60_000), "1h\n05m")
+assert.equal(W.verticalClock(125 * 60_000), "2h\n05m")
+assert.equal(W.verticalClock(90_000), "2m")
+assert.equal(W.verticalClock(0), "0m")
+assert.equal(W.barLabelVertical(running), "1h\n05m")
+assert.equal(W.barLabelVertical({ ...status, current_session: null }), "2h\n00m")
+assert.equal(W.barLabelVertical(pausedOpen), "2m")
+assert.equal(W.barLabelVertical(null), "--")
 assert.match(W.tooltip(running, NOW, 30), /coral - 1h 05m provisional \(running\)/)
 assert.match(W.tooltip(pausedOpen, NOW, 30), /coral - 2m provisional \(paused\)/)
 

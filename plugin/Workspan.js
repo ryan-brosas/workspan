@@ -59,6 +59,28 @@ function formatClock(ms) {
 }
 
 /**
+ * "1h\n05m" - a vertical bar is one widget wide, so a duration stacks the same
+ * way the stock clock stacks its lines. Fixed-square widgets clip anything
+ * longer than two characters against the bar edge.
+ */
+function verticalClock(ms) {
+  var minutes = Math.round(number(ms) / 60000)
+  var hours = Math.floor(minutes / 60)
+  var rest = minutes % 60
+  if (hours <= 0) return rest + "m"
+  return hours + "h\n" + (rest < 10 ? "0" + rest : String(rest)) + "m"
+}
+
+function barLabelVertical(status) {
+  if (!status) return "--"
+  var session = status.current_session
+  if (session) return verticalClock(session.provisional_ms)
+  var attested = measure(status, "attested").unionMs
+  var inferred = measure(status, "inferred").unionMs
+  return verticalClock(attested > inferred ? attested : inferred)
+}
+
+/**
  * The bar shows a running session's provisional clock while one is open, and the
  * strongest attended measure otherwise - never a sum of measures, so an agent
  * running unattended must not read as time worked. Provisional is honest: the

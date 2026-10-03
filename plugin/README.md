@@ -32,8 +32,10 @@ time worked, so it is shown in the popup with its own label.
 - **The CLI for commands, as an argv array.** `Process` runs
   `[cliPath, "--socket", socketPath, ...]`; no shell text is ever interpolated,
   and the plugin never opens the database, so it cannot become a second writer.
-- **No glyph by default.** No timer glyph is currently in use in the shell, so the
-  default is the plain time; `glyph` accepts any Nerd Font character.
+- **The shell's own bar button.** The widget renders through `WidgetButton` and
+  `OpticalGlyph` exactly like the stock clock: text when the bar is horizontal,
+  one glyph per stacked line when it is vertical (`1h` over `05m`), with the
+  bar's native tooltip, press states and offline dimming.
 
 ## Settings
 

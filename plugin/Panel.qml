@@ -23,7 +23,6 @@ Panel {
   readonly property string statusFile: Workspan.expandPath(setting("statusFile", ""), runtimeDir + "/status.json", home)
   readonly property string socketFile: Workspan.expandPath(setting("socketPath", ""), runtimeDir + "/workspan.sock", home)
   readonly property string cliPath: String(setting("cliPath", "workspan"))
-  readonly property string glyph: String(setting("glyph", ""))
   readonly property string project: String(setting("project", ""))
   readonly property int refreshSeconds: Math.max(5, Number(setting("refreshSeconds", 30)))
 
@@ -43,12 +42,16 @@ Panel {
   readonly property string freshness: Workspan.staleness(snapshot, nowMs, refreshSeconds)
   readonly property bool online: freshness === "fresh"
   readonly property var warnings: Workspan.warnings(snapshot)
-  readonly property string barText: Workspan.barLabel(snapshot)
+  readonly property string barText: root.vertical ? Workspan.barLabelVertical(root.snapshot) : Workspan.barLabel(root.snapshot)
+  /** One entry per stacked line, the way the stock clock splits its vertical format. */
+  readonly property var verticalLines: root.vertical ? root.barText.split("\n") : []
   readonly property bool sessionOpen: !!(snapshot && snapshot.current_session)
   readonly property bool sessionPaused: !!(snapshot && snapshot.current_session && snapshot.current_session.state === "paused")
 
-  implicitWidth: vertical ? barSize : Math.max(barSize, barRow.implicitWidth + Style.space(12))
-  implicitHeight: barSize
+  // The stock clock's sizing: the widget mirrors its button, and the button
+  // measures itself from the label, one iconSlot per stacked line when vertical.
+  implicitWidth: button.implicitWidth
+  implicitHeight: button.implicitHeight
 
   // A popup is owned by the bar's popout coordinator: without registering it on
   // open, the surface is created and immediately released again. This mirrors the
@@ -125,69 +128,42 @@ Panel {
   }
 
   // ----------------------------------------------------------- bar button
-  Rectangle {
+  // The shell's own bar button, used the way the stock clock uses it: text when
+  // horizontal, one OpticalGlyph per stacked line when vertical, with the
+  // tooltip, press states and offline dimming the bar already provides.
+  WidgetButton {
     id: button
     anchors.fill: parent
-    radius: Style.cornerRadius
-    // A vertical bar is only a couple of characters wide, so the "not writing"
-    // signal cannot rely on a trailing dot that would be clipped: the button
-    // itself carries a faint band whenever the status is not fresh.
-    color: root.opened
-      ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.14)
-      : (root.online ? "transparent" : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.10))
+    bar: root.bar
+    text: root.vertical ? "" : root.barText
+    labelVisible: !root.vertical
+    hasVisualContent: root.vertical ? root.verticalLines.length > 0 : true
+    fixedHeight: root.vertical ? root.verticalLines.length * Style.bar.iconSlot : -1
+    dimmed: !root.online
+    tooltipText: Workspan.tooltip(root.snapshot, root.nowMs, root.refreshSeconds)
 
-    Behavior on color { ColorAnimation { duration: 120 } }
-
-    Row {
-      id: barRow
-      anchors.centerIn: parent
-      spacing: Style.space(5)
-
-      Text {
-        visible: root.glyph !== ""
-        text: root.glyph
-        color: root.foreground
-        opacity: root.online ? 1 : 0.45
-        font.family: root.fontFamily
-        font.pixelSize: Style.bar.iconFont
-        anchors.verticalCenter: parent.verticalCenter
-      }
-
-      Text {
-        text: root.barText
-        color: root.foreground
-        opacity: root.online ? 1 : 0.55
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.bodySmall
-        anchors.verticalCenter: parent.verticalCenter
-      }
-
-      Rectangle {
-        // Geometry decides, not an orientation flag: in a 23px vertical bar the
-        // dot would be clipped, and the tinted band already carries the signal.
-        visible: !root.online && root.width >= Style.space(46)
-        width: Style.space(5)
-        height: width
-        radius: width / 2
-        color: root.foreground
-        opacity: 0.5
-        anchors.verticalCenter: parent.verticalCenter
-      }
+    onPressed: function (mouseButton) {
+      if (mouseButton === Qt.RightButton) root.refreshNow()
+      else if (mouseButton === Qt.MiddleButton) root.toggleSession()
+      else root.toggle()
     }
 
-    MouseArea {
+    Column {
+      visible: root.vertical
       anchors.fill: parent
-      hoverEnabled: true
-      acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
-      cursorShape: Qt.PointingHandCursor
 
-      onEntered: if (root.bar) root.bar.showTooltip(button, Workspan.tooltip(root.snapshot, root.nowMs, root.refreshSeconds))
-      onExited: if (root.bar) root.bar.hideTooltip(button)
-      onClicked: function (mouse) {
-        if (root.bar) root.bar.hideTooltip(button)
-        if (mouse.button === Qt.RightButton) root.refreshNow()
-        else if (mouse.button === Qt.MiddleButton) root.toggleSession()
-        else root.toggle()
+      Repeater {
+        model: root.verticalLines
+
+        OpticalGlyph {
+          required property string modelData
+          width: button.width
+          height: Style.bar.iconSlot
+          text: modelData
+          fontFamily: button.fontFamily
+          fontSize: modelData.length > 3 ? button.fontSize * 0.9 : button.fontSize
+          color: root.online ? button.foreground : Qt.rgba(button.foreground.r, button.foreground.g, button.foreground.b, 0.55)
+        }
       }
     }
   }
