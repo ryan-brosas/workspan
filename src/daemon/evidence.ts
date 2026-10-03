@@ -31,6 +31,12 @@ export interface EvidenceEvent {
   origin: Origin;
   /** Explicit attribution. Absent means unallocated, never a guessed client. */
   project?: string;
+  /**
+   * The workspace the evidence happened in: the repository root, derived mechanically
+   * from the working directory. It is not a client name - a binding resolves it, and
+   * recording it lets a confirmed binding re-attribute later without re-importing.
+   */
+  root?: string;
 }
 
 /**
@@ -46,7 +52,7 @@ export function eventId(event: Pick<EvidenceEvent, "source" | "instance" | "sess
  * this value are a conflict, not a silent overwrite; the same value is a duplicate.
  */
 export function fingerprint(event: EvidenceEvent): string {
-  const canonical = JSON.stringify([event.source, event.instance, event.session, event.event, event.kind, event.at, event.origin, event.project ?? null]);
+  const canonical = JSON.stringify([event.source, event.instance, event.session, event.event, event.kind, event.at, event.origin, event.project ?? null, event.root ?? null]);
   return createHash("sha256").update(canonical).digest("hex");
 }
 
@@ -65,7 +71,7 @@ function text(value: unknown, field: string): string {
 export function validateEvent(raw: unknown): EvidenceEvent {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("event must be an object");
   const value = raw as Record<string, unknown>;
-  const allowed = new Set(["v", "source", "instance", "session", "event", "kind", "at", "origin", "project"]);
+  const allowed = new Set(["v", "source", "instance", "session", "event", "kind", "at", "origin", "project", "root"]);
   for (const key of Object.keys(value)) if (!allowed.has(key)) throw new Error(`unexpected field ${JSON.stringify(key)}`);
   if (value.v !== undefined && value.v !== EVIDENCE_VERSION) throw new Error(`unsupported evidence version ${JSON.stringify(value.v)}`);
   const source = text(value.source, "source");
@@ -85,5 +91,6 @@ export function validateEvent(raw: unknown): EvidenceEvent {
     at: at as number,
     origin: origin as Origin,
     project: value.project === undefined ? undefined : text(value.project, "project"),
+    root: value.root === undefined ? undefined : text(value.root, "root"),
   };
 }

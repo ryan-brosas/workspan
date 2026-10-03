@@ -21,7 +21,7 @@ const event: EvidenceEvent = {
 
 /** Drives the inferred-window clock exactly as the daemon does: inside the ingest transaction. */
 function ingestHuman(store: WorkspanStore, e: EvidenceEvent, project = e.project) {
-  const scope = clockScope(project, e.session);
+  const scope = clockScope({ root: e.root, project }, e.session);
   const clock = new AutomaticClock(store, scope, scope.sessionId, scope.task, 900_000);
   return store.ingest(e, 1, () => clock.touch(e.at));
 }
@@ -38,7 +38,7 @@ test("replaying one observation neither duplicates evidence nor moves any measur
 
 test("retry timing is not part of identity, so a late redelivery is still a duplicate", () => {
   const { store } = fixture();
-  const scope = clockScope(event.project, event.session);
+  const scope = clockScope({ root: event.root, project: event.project }, event.session);
   const clock = new AutomaticClock(store, scope, scope.sessionId, scope.task, 900_000);
   expect(store.ingest(event, 1, () => clock.touch(event.at)).status).toBe("accepted");
   expect(store.ingest(event, Date.now() + 86_400_000, () => clock.touch(event.at)).status).toBe("duplicate");

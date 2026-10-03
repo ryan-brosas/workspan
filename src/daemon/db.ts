@@ -27,7 +27,7 @@ const SCHEMA = `
 create table if not exists meta (key text primary key, value text not null);
 create table if not exists observations (
   event_id text primary key, source text not null, instance text not null, session text not null, event text not null,
-  kind text not null, at integer not null, origin text not null, project text, fingerprint text not null, received_at integer not null
+  kind text not null, at integer not null, origin text not null, project text, root text, fingerprint text not null, received_at integer not null
 );
 create index if not exists observations_at on observations(at);
 create table if not exists conflicts (
@@ -64,6 +64,9 @@ export class WorkspanStore implements WindowPort {
     this.db.exec("pragma journal_mode = wal");
     this.db.exec("pragma synchronous = full");
     this.db.exec(SCHEMA);
+    // A database created before evidence carried a root gains the column rather than
+    // being rebuilt: a ledger must survive its own schema learning.
+    try { this.db.exec("alter table observations add column root text"); } catch { /* already present */ }
     this.db.prepare("insert or ignore into meta(key, value) values('schema_version', ?)").run(String(SCHEMA_VERSION));
   }
 
@@ -101,8 +104,8 @@ export class WorkspanStore implements WindowPort {
     }
     this.db.exec("begin immediate");
     try {
-      this.db.prepare("insert into observations(event_id, source, instance, session, event, kind, at, origin, project, fingerprint, received_at) values(?,?,?,?,?,?,?,?,?,?,?)")
-        .run(id, event.source, event.instance, event.session, event.event, event.kind, event.at, event.origin, event.project ?? null, print, receivedAt);
+      this.db.prepare("insert into observations(event_id, source, instance, session, event, kind, at, origin, project, root, fingerprint, received_at) values(?,?,?,?,?,?,?,?,?,?,?,?)")
+        .run(id, event.source, event.instance, event.session, event.event, event.kind, event.at, event.origin, event.project ?? null, event.root ?? null, print, receivedAt);
       this.bumpSource(event.source, event.at, receivedAt);
       this.applyEffect(event);
       // The clock writes through this same connection, so an accepted
@@ -159,6 +162,7 @@ export class WorkspanStore implements WindowPort {
       eventId: String(row.event_id), source: String(row.source) as Observation["source"], instance: String(row.instance),
       session: String(row.session), event: String(row.event), kind: String(row.kind) as Kind, at: Number(row.at),
       origin: String(row.origin) as Origin, project: row.project === null ? undefined : String(row.project),
+      root: row.root === null || row.root === undefined ? undefined : String(row.root),
       receivedAt: Number(row.received_at),
     }));
   }
@@ -198,6 +202,13 @@ export class WorkspanStore implements WindowPort {
     }));
   }
 
+  /** Resolve a workspace root to its recorded project label. No binding, no client. */
+  resolveProject(root: string): string | undefined {
+    if (!root) return undefined;
+    const row = this.db.prepare("select project from project_bindings where root = ?").get(root) as { project: string } | undefined;
+    return row?.project;
+  }
+
   close(): void { if (!this.closed) { this.closed = true; this.db.close(); } }
 }
 
@@ -209,9 +220,18 @@ export function sessionKey(event: Pick<EvidenceEvent, "source" | "instance" | "s
   return [event.source, event.instance, event.session].map(part => encodeURIComponent(part)).join("|");
 }
 
-/** The clock's workspace identity for one observation: project when known. */
-export function clockScope(project: string | undefined, session: string): { root: string; client: string; sessionId: string; task: string } {
-  return { root: project ?? "", client: project ?? "unallocated", sessionId: session, task: project ?? "unlabeled" };
+/**
+ * The clock's workspace identity for one observation. The root is where the evidence
+ * happened; the client label is attribution. Both are recorded on the window, so a
+ * later confirmed binding can re-attribute without re-importing evidence.
+ */
+export function clockScope(attribution: { root?: string; project?: string }, session: string): { root: string; client: string; sessionId: string; task: string } {
+  return {
+    root: attribution.root ?? attribution.project ?? "",
+    client: attribution.project ?? "unallocated",
+    sessionId: session,
+    task: attribution.project ?? "unlabeled",
+  };
 }
 
 function windowFromRow(row: Record<string, unknown>): ClockWindow {

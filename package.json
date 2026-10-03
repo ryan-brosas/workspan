@@ -15,5 +15,10 @@
     "daemon": "bun src/daemon/main.ts",
     "workspan": "bun src/cli/workspan.ts"
   },
-  "devDependencies": { "@types/bun": "1.3.9", "typescript": "5.9.3" }
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.87.1",
+    "@earendil-works/pi-tui": "0.87.1",
+    "@types/bun": "1.3.9",
+    "typescript": "5.9.3"
+  }
 }

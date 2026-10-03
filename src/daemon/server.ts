@@ -59,7 +59,7 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   /** One clock per (project, session); its policy is core/clock.ts, restored from stored windows. */
   const clocks = new Map<string, AutomaticClock>();
   const clockFor = (event: EvidenceEvent) => {
-    const scope = scopeFor(event.project, event.session);
+    const scope = scopeFor(event, event.session);
     const key = JSON.stringify(scope);
     let clock = clocks.get(key);
     if (!clock) { clock = new AutomaticClock(store, scope, scope.sessionId, scope.task, idleGapMs); clocks.set(key, clock); }
@@ -89,8 +89,14 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     const receipts: Array<IngestResult & { at: number }> = [];
     for (const raw of list) {
       const event = validateEvent(raw);
+      // Attribution is resolved here, not in the adapter: an adapter that named a
+      // client would be guessing it. The root travels with the evidence so a
+      // confirmed binding can re-attribute later.
       const human = event.kind === "interaction" && event.origin === "human";
-      receipts.push({ ...store.ingest(event, now(), e => { if (human) clockFor(e).touch(e.at); }), at: event.at });
+      const attributed: EvidenceEvent = event.project === undefined
+        ? { ...event, ...(store.resolveProject(event.root ?? "") ? { project: store.resolveProject(event.root ?? "") } : {}) }
+        : event;
+      receipts.push({ ...store.ingest(attributed, now(), e => { if (human) clockFor(e).touch(e.at); }), at: event.at });
     }
     // A conflict changes what the report must show, so it invalidates the
     // projection too — not only a newly accepted observation.

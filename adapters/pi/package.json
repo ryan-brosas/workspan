@@ -1,0 +1,10 @@
+{
+  "name": "workspan-pi-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Workspan evidence adapter for Pi: terminal presence and turn timing only.",
+  "pi": { "extensions": ["./index.ts"] },
+  "peerDependencies": { "@earendil-works/pi-coding-agent": "*", "@earendil-works/pi-tui": "*" }
+}

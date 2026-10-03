@@ -245,4 +245,4 @@ export function buildStatus(store: WorkspanStore, options: { idleGapMs: number; 
 }
 
 /** Scope used to drive the inferred-window policy for one observation. */
-export function scopeFor(project: string | undefined, session: string) { return clockScope(project, session); }
+export function scopeFor(attribution: { root?: string; project?: string }, session: string) { return clockScope(attribution, session); }

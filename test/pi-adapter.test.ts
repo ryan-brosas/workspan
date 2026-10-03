@@ -1,0 +1,145 @@
+import { afterAll, expect, test } from "bun:test";
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { WorkspanStore } from "../src/daemon/db.ts";
+import { readStatusFile, startDaemon, type Daemon } from "../src/daemon/server.ts";
+import { WorkspanEmitter, isHumanInput, repositoryRoot, TICK_MS } from "../adapters/pi/index.ts";
+
+const roots: string[] = [];
+let daemon: Daemon | null = null;
+let store: WorkspanStore | null = null;
+let runtimeDir = "";
+let spoolPath = "";
+let emitter: WorkspanEmitter | null = null;
+let prepared = false;
+const root = "/tmp/workspan-adapter-repo";
+const base = 1_700_000_000_000;
+
+// ---- presence decoding: inherited corpus, same expectations ----
+
+test("presence decoding separates work from terminal chatter", () => {
+  expect(isHumanInput("a")).toBe(true);
+  expect(isHumanInput("\r")).toBe(true);
+  expect(isHumanInput("hello typed text")).toBe(true);
+  expect(isHumanInput("\x1b[200~pasted content\x1b[201~")).toBe(true);
+  expect(isHumanInput("")).toBe(false);
+  expect(isHumanInput("\x1b[I")).toBe(false);
+  expect(isHumanInput("\x1b[O")).toBe(false);
+  expect(isHumanInput("\x1b[<0;12;3M")).toBe(false);
+  expect(isHumanInput("\x1b]52;c:aGVsbG8\x07")).toBe(false);
+  expect(isHumanInput("\x1b[?1;2c")).toBe(false);
+});
+
+test("the workspace root walks up to the repository", () => {
+  const dir = mkdtempSync(join(tmpdir(), "adapter-root-"));
+  roots.push(dir);
+  mkdirSync(join(dir, ".git"));
+  mkdirSync(join(dir, "nested", "deep"), { recursive: true });
+  expect(repositoryRoot(join(dir, "nested", "deep"))).toBe(dir);
+  const bare = mkdtempSync(join(tmpdir(), "adapter-bare-"));
+  roots.push(bare);
+  expect(repositoryRoot(bare)).toBe(bare);
+});
+
+// ---- delivery and measures, against a real daemon ----
+
+function setup() {
+  if (prepared) return;
+  prepared = true;
+  const dir = mkdtempSync(join(tmpdir(), "workspan-adapter-"));
+  roots.push(dir);
+  runtimeDir = join(dir, "run");
+  spoolPath = join(dir, "pi-spool.jsonl");
+  store = new WorkspanStore(join(dir, "workspan.sqlite"));
+  emitter = new WorkspanEmitter({ socketPath: join(runtimeDir, "workspan.sock"), instance: "test-host", spoolPath });
+}
+
+// startDaemon is async; the integration tests await it through this helper.
+let daemonPromise: Promise<Daemon> | null = null;
+
+async function ensureDaemon(): Promise<Daemon> {
+  if (!daemonPromise) {
+    daemonPromise = startDaemon({ store: store!, runtimeDir, idleGapMs: 900_000 }).then(started => {
+      daemon = started;
+      return started;
+    });
+  }
+  return daemonPromise;
+}
+
+test("ticks and turns become separate measures, with the root recorded", async () => {
+  setup();
+  const d = await ensureDaemon();
+  void d;
+  emitter!.emit({ what: "tick", at: base, session: "s1", root });
+  emitter!.emit({ what: "tick", at: base + 5_000, session: "s1", root });
+  emitter!.emit({ what: "turn-start", at: base + 60_000, session: "s1", root });
+  emitter!.emit({ what: "turn-end", at: base + 120_000, session: "s1", root });
+  // A settled turn is also presence: the window continues while the human reads.
+  emitter!.emit({ what: "tick", at: base + 120_000, session: "s1", root });
+  await emitter!.flush();
+
+  const status = readStatusFile(runtimeDir);
+  // Two ticks five seconds apart, then a 55s pause to the settled turn: one window.
+  expect(status.measures.inferred.union_ms).toBe(120_000);
+  expect(status.measures.agent.union_ms).toBe(60_000);
+  // No binding exists, so the evidence is unallocated, and the root is recorded
+  // for the moment one is confirmed.
+  expect(status.measures.inferred.unallocated_ms).toBe(120_000);
+  const windows = store!.windows();
+  expect(windows).toHaveLength(1);
+  expect(windows[0].root).toBe(root);
+  expect(windows[0].client).toBe("unallocated");
+});
+
+test("a confirmed binding attributes new evidence, and never re-attributes recorded rows", async () => {
+  setup();
+  store!.bindProject(root, "coral", true, "test");
+  emitter!.emit({ what: "tick", at: base + 300_000, session: "s1", root });
+  emitter!.emit({ what: "tick", at: base + 305_000, session: "s1", root });
+  emitter!.emit({ what: "tick", at: base + 400_000, session: "s1", root });
+  await emitter!.flush();
+  const status = readStatusFile(runtimeDir);
+  // Inherited semantics: a client change opens a fresh window at the next
+  // observation, and the earlier window keeps its own attribution.
+  const windows = store!.windows();
+  expect(windows).toHaveLength(2);
+  expect(windows[0]).toMatchObject({ client: "unallocated", start: base, end: base + 120_000 });
+  expect(windows[1]).toMatchObject({ client: "coral", start: base + 300_000, end: base + 400_000 });
+  expect(status.measures.inferred.union_ms).toBe(220_000);
+  expect(status.measures.inferred.projects).toEqual([{ project: "coral", ms: 100_000 }]);
+  expect(status.measures.inferred.unallocated_ms).toBe(120_000);
+});
+
+test("evidence survives the daemon being down, and drains on restart", async () => {
+  // A second emitter, pointed at a socket nobody is listening on yet.
+  const offlineDir = mkdtempSync(join(tmpdir(), "workspan-offline-"));
+  roots.push(offlineDir);
+  const offlineSpool = join(offlineDir, "spool.jsonl");
+  const offline = new WorkspanEmitter({ socketPath: join(offlineDir, "missing.sock"), instance: "test-host", spoolPath: offlineSpool });
+  offline.emit({ what: "tick", at: base + 600_000, session: "s2", root });
+  await expect(offline.flush()).rejects.toThrow();
+  // The spool still holds the event; draining it into the live daemon works.
+  const drain = new WorkspanEmitter({ socketPath: join(runtimeDir, "workspan.sock"), instance: "test-host", spoolPath: offlineSpool });
+  await drain.flush();
+  const status = readStatusFile(runtimeDir);
+  // Ticks inside the same ten-second bucket share an identity, so the count is
+  // unique observations, not emitted lines: 4, then 2 more, then this one.
+  expect(status.coverage.events).toBe(7);
+});
+
+test("a tick inside the same bucket is one identity, so a redelivery adds nothing", async () => {
+  setup();
+  emitter!.emit({ what: "tick", at: base + 400_000, session: "s1", root });
+  emitter!.emit({ what: "tick", at: base + 400_000 + TICK_MS / 2, session: "s1", root });
+  await emitter!.flush();
+  const before = store!.observations().length;
+  await emitter!.flush();
+  expect(store!.observations().length).toBe(before);
+});
+
+afterAll(async () => {
+  if (daemon) await daemon.close();
+  for (const r of roots) rmSync(r, { recursive: true, force: true });
+});

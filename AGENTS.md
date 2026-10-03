@@ -51,6 +51,10 @@ native lane, and the tests asserting the default lane will fail if it is set.
   fields only — never titles, descriptions, tags, URLs, keystrokes or the clipboard.
 - **Nothing stores content.** No prompts, replies, titles, URLs, credentials or
   tool payloads in the database, spools, status file or logs.
+- **The Pi adapter shadows, it never replaces.** It never opens the tracker's
+  database, never writes its ledgers, and resolves no client names itself — it sends
+  the workspace root and the daemon attributes from bindings. The two ledgers are
+  never added together until the cutover removes one writer.
 - **Migration never touches the live ledger by accident.** It plans first, imports
   into an explicitly named target, refuses the daemon's own database without an
   explicit flag, and reports whether both imported measures reconcile with the
