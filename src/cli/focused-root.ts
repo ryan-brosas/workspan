@@ -75,13 +75,22 @@ export function majorityRoot(roots: readonly string[]): string | null {
   return best;
 }
 
+/**
+ * Herdr marks the one pane the user last worked in with `focused: true`. Every
+ * agent carries a `foreground_cwd`, so the flag - not the field - is the
+ * discriminator: reading the first field found attributed sessions to whichever
+ * pane led the list. No focused pane means no answer; the window tree decides.
+ */
 export function pickForegroundCwd(agents: unknown): string | null {
   if (!Array.isArray(agents)) return null;
   for (const agent of agents) {
-    if (agent && typeof agent === "object") {
-      const value = (agent as { foreground_cwd?: unknown }).foreground_cwd;
-      if (typeof value === "string" && value.trim() !== "") return value;
+    if (!agent || typeof agent !== "object") continue;
+    const record = agent as { focused?: unknown; foreground_cwd?: unknown; cwd?: unknown };
+    if (record.focused !== true) continue;
+    for (const candidate of [record.foreground_cwd, record.cwd]) {
+      if (typeof candidate === "string" && candidate.trim() !== "") return candidate;
     }
+    return null;
   }
   return null;
 }
@@ -130,8 +139,13 @@ export function focusedWindowRoot(): string | null {
   } catch { return null; }
 }
 
-export async function focusedRoot(): Promise<string | null> {
+/** The derived workspace and which signal answered, so callers can say where it came from. */
+export type FocusedRoot = { root: string; source: "herdr" | "window" };
+
+export async function focusedRoot(): Promise<FocusedRoot | null> {
   const viaHerdr = await herdrForegroundCwd();
-  if (viaHerdr) return repositoryRoot(viaHerdr);
-  return focusedWindowRoot();
+  if (viaHerdr) return { root: repositoryRoot(viaHerdr), source: "herdr" };
+  const viaWindow = focusedWindowRoot();
+  if (viaWindow) return { root: viaWindow, source: "window" };
+  return null;
 }

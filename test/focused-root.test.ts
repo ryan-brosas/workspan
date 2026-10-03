@@ -3,12 +3,28 @@ import { join } from "node:path";
 import { cwdOf, descendantRoots, herdrForegroundCwd, majorityRoot, pickForegroundCwd, plausibleCwd } from "../src/cli/focused-root.ts";
 import { repositoryRoot } from "../src/core/workspace.ts";
 
-test("the foreground pane is the only cwd that counts", () => {
+test("the focused agent decides, never list order", () => {
+  // A real Herdr payload gives every agent a foreground_cwd, so the flag is the
+  // only discriminator - and the focused pane deliberately is not first.
+  const agents = [
+    { focused: false, cwd: "/mnt/ssd/work/project/beacon-brand-website", foreground_cwd: "/mnt/ssd/work/project/beacon-brand-website" },
+    { focused: false, cwd: "/mnt/ssd/work/coral-stuff", foreground_cwd: "/mnt/ssd/work/coral-stuff" },
+    { focused: true, cwd: "/mnt/ssd/work/project/workspan", foreground_cwd: "/mnt/ssd/work/project/workspan" },
+  ];
+  expect(pickForegroundCwd(agents)).toBe("/mnt/ssd/work/project/workspan");
+
+  // The old shape - a lone foreground_cwd with nobody focused - is not a signal.
+  expect(pickForegroundCwd([{ cwd: "/a" }, { foreground_cwd: "/mnt/ssd/work/project/workspan", cwd: "/a" }])).toBeNull();
+  // Nothing focused: no answer from Herdr at all, and list order never guesses.
+  expect(pickForegroundCwd(agents.map(agent => ({ ...agent, focused: false })))).toBeNull();
+
+  // A focused pane without foreground_cwd still resolves through its cwd.
+  expect(pickForegroundCwd([{ focused: true, cwd: "/mnt/ssd/work/project/workspan" }])).toBe("/mnt/ssd/work/project/workspan");
+  // Blank or junk values are never a workspace.
+  expect(pickForegroundCwd([{ focused: true, foreground_cwd: "  ", cwd: "" }])).toBeNull();
+  expect(pickForegroundCwd([{ focused: true, foreground_cwd: "  ", cwd: "/x" }])).toBe("/x");
   expect(pickForegroundCwd(undefined)).toBeNull();
-  expect(pickForegroundCwd([{ cwd: "/some/dir" }, { foreground_cwd: "", cwd: "/other" }])).toBeNull();
-  expect(pickForegroundCwd([{ foreground_cwd: "  ", cwd: "/x" }])).toBeNull();
-  expect(pickForegroundCwd([{ cwd: "/a" }, { foreground_cwd: "/mnt/ssd/work/project/workspan", cwd: "/a" }]))
-    .toBe("/mnt/ssd/work/project/workspan");
+  expect(pickForegroundCwd([null, 42, "x"])).toBeNull();
 });
 
 test("process plumbing is never a workspace", () => {

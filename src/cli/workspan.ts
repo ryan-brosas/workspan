@@ -88,28 +88,64 @@ async function main(): Promise<number> {
   // derives the workspace the user is actually in - Herdr's focused pane, then the
   // focused window's process tree - and the daemon resolves the client from the
   // binding. Nothing here names a client on its own.
-  const sessionParams = async (): Promise<Record<string, string>> => {
-    const params: Record<string, string> = {};
+  type SessionOrigin = "project" | "root" | "herdr" | "window" | "none";
+  type SessionResult = { action?: string; project?: string | null; root?: string | null; session?: string };
+  const sessionParams = async (): Promise<{ params: Record<string, string>; origin: SessionOrigin }> => {
     const project = flag("--project");
     const root = flag("--root");
-    if (project) params.project = project;
-    else if (root) params.root = root;
-    else {
-      const { focusedRoot } = await import("./focused-root.ts");
-      const derived = await focusedRoot();
-      if (derived) params.root = derived;
+    if (project) return { params: { project }, origin: "project" };
+    if (root) return { params: { root }, origin: "root" };
+    const { focusedRoot } = await import("./focused-root.ts");
+    const derived = await focusedRoot();
+    if (derived) return { params: { root: derived.root }, origin: derived.source };
+    return { params: {}, origin: "none" };
+  };
+
+  // JSON stays on stdout for machines; this one line goes to stderr so a wrong
+  // attribution is visible the moment it happens instead of in a report later.
+  const announce = (result: SessionResult | undefined, origin: SessionOrigin, params: Record<string, string>): void => {
+    if (result?.action === "stopped") {
+      console.error(`tracking stopped · ${result.session ?? "session"}`);
+      return;
     }
-    return params;
+    const project = result?.project ?? null;
+    const root = result?.root ?? params.root ?? null;
+    if (!project) {
+      console.error(root ? `tracking (unallocated) · no binding for ${root}` : "tracking (unallocated) · no focused workspace");
+      return;
+    }
+    const where =
+      origin === "herdr" ? `from Herdr pane ${root}` :
+      origin === "window" ? `from focused window ${root}` :
+      origin === "root" ? `explicit root ${root}` :
+      origin === "project" ? "explicit project" :
+      "";
+    console.error(where ? `tracking ${project} · ${where}` : `tracking ${project}`);
   };
 
   if (group === "session" && action === "start") {
-    console.log(JSON.stringify(await request("session.start", await sessionParams()), null, 2));
+    const { params, origin } = await sessionParams();
+    const result = (await request("session.start", params)) as SessionResult;
+    announce(result, origin, params);
+    console.log(JSON.stringify(result, null, 2));
     return 0;
   }
-  if (group === "session" && action === "toggle") { console.log(JSON.stringify(await request("session.toggle", await sessionParams()), null, 2)); return 0; }
+  if (group === "session" && action === "toggle") {
+    const { params, origin } = await sessionParams();
+    const result = (await request("session.toggle", params)) as SessionResult;
+    announce(result, origin, params);
+    console.log(JSON.stringify(result, null, 2));
+    return 0;
+  }
   if (group === "session" && action === "pause") { console.log(JSON.stringify(await request("session.pause"), null, 2)); return 0; }
   if (group === "session" && action === "resume") { console.log(JSON.stringify(await request("session.resume"), null, 2)); return 0; }
-  if (group === "session" && action === "switch") { console.log(JSON.stringify(await request("session.switch", await sessionParams()), null, 2)); return 0; }
+  if (group === "session" && action === "switch") {
+    const { params, origin } = await sessionParams();
+    const result = (await request("session.switch", params)) as SessionResult;
+    announce(result, origin, params);
+    console.log(JSON.stringify(result, null, 2));
+    return 0;
+  }
   if (group === "session" && action === "pick") {
     // Outside-harness work: no terminal is focused, so the workspace cannot be
     // derived. The user picks a company from their bindings on the shell's picker.
