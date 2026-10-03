@@ -1,10 +1,10 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { WorkspanStore } from "../src/daemon/db.ts";
 import { readStatusFile, startDaemon, type Daemon } from "../src/daemon/server.ts";
-import { WorkspanEmitter, isHumanInput, repositoryRoot, TICK_MS } from "../adapters/pi/index.ts";
+import { WorkspanEmitter, drainOrphanedSpools, isHumanInput, repositoryRoot, TICK_MS } from "../adapters/pi/index.ts";
 
 const roots: string[] = [];
 let daemon: Daemon | null = null;
@@ -152,6 +152,28 @@ test("two terminals in two projects stay separate sessions with per-root attribu
   expect(status.measures.inferred.projects).toEqual(expect.arrayContaining([{ project: "beacon", ms: 10_000 }]));
   expect(status.measures.inferred.projects.find(p => p.project === "coral")?.ms).toBeGreaterThanOrEqual(10_000);
   expect(status.measures.inferred.union_ms).toBeGreaterThanOrEqual(20_000);
+});
+
+test("a dead process's undrained evidence is recovered; a live one's is not touched", async () => {
+  setup();
+  await ensureDaemon();
+  const evidence = JSON.stringify({ v: 1, source: "pi", instance: "test-host", session: "orphan", event: "orphan-1", kind: "interaction", at: base + 900_000, origin: "human" }) + "\n";
+  const dead = Bun.spawn(["sleep", "0.05"]);
+  await dead.exited;
+  const orphan = join(dirname(spoolPath), "pi-spool-" + dead.pid + ".jsonl");
+  writeFileSync(orphan, evidence);
+  await drainOrphanedSpools(join(runtimeDir, "workspan.sock"), dirname(spoolPath));
+  expect(existsSync(orphan)).toBe(false);
+  expect(store!.observations().some(o => o.event === "orphan-1")).toBe(true);
+
+  const alive = Bun.spawn(["sleep", "30"]);
+  const owned = join(dirname(spoolPath), "pi-spool-" + alive.pid + ".jsonl");
+  writeFileSync(owned, evidence);
+  await drainOrphanedSpools(join(runtimeDir, "workspan.sock"), dirname(spoolPath));
+  // A live process owns its spool: nobody else drains it out from under it.
+  expect(existsSync(owned)).toBe(true);
+  alive.kill();
+  rmSync(owned, { force: true });
 });
 
 test("a tick inside the same bucket is one identity, so a redelivery adds nothing", async () => {

@@ -15,7 +15,7 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isKeyRelease, parseKey } from "@earendil-works/pi-tui";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { hostname } from "node:os";
 import { join } from "node:path";
@@ -51,8 +51,37 @@ export function repositoryRoot(cwd: string): string {
   }
 }
 
+export function spoolDirectory(): string {
+  return join(process.env.XDG_STATE_HOME ?? join(process.env.HOME ?? "/home", ".local", "state"), "workspan");
+}
+
+/**
+ * Per process: two Pi terminals flushing one shared spool race each other, and a
+ * flush that renames the file empty can drop a line another process just appended.
+ * A private spool cannot race; a dead process's spool is drained by the next one.
+ */
 export function defaultSpoolPath(): string {
-  return join(process.env.XDG_STATE_HOME ?? join(process.env.HOME ?? "/home", ".local", "state"), "workspan", "pi-spool.jsonl");
+  return join(spoolDirectory(), "pi-spool-" + process.pid + ".jsonl");
+}
+
+export async function drainOrphanedSpools(socketPath: string, directory: string = spoolDirectory()): Promise<void> {
+  let names: string[] = [];
+  try { names = readdirSync(directory).filter(name => /^pi-spool-\d+\.jsonl$/.test(name)); }
+  catch { return; }
+  for (const name of names) {
+    const pid = Number(name.slice("pi-spool-".length).replace(/\.jsonl$/, ""));
+    if (pid === process.pid) continue;
+    let alive = true;
+    try { process.kill(pid, 0); }
+    catch (error) { alive = (error as NodeJS.ErrnoException).code !== "ESRCH"; }
+    if (alive) continue;
+    const path = join(directory, name);
+    try {
+      const lines = readFileSync(path, "utf8").split("\n").filter(Boolean);
+      if (lines.length) await request(socketPath, "ingest", { events: lines.map(line => JSON.parse(line)) });
+      rmSync(path, { force: true });
+    } catch { /* undeliverable now: leave it for the next session to try */ }
+  }
 }
 
 export type PresenceKind = "tick" | "turn-start" | "turn-end";
@@ -174,6 +203,9 @@ export default function workspanPiAdapter(pi: ExtensionAPI): void {
     const session = ctx.sessionManager?.getSessionId?.() ?? randomUUID();
     roots.set(session, repositoryRoot(ctx.cwd ?? process.cwd()));
     live = session;
+    // Evidence stranded by a crashed process is delivered here; the daemon dedupes
+    // by identity, so a replay is always safe.
+    void drainOrphanedSpools(socketPath).catch(() => undefined);
     // Registered once: the handler reads the live session when input happens, so a
     // switched or concurrent session cannot capture another one's keystrokes.
     if (!inputBound && ctx.mode === "tui" && typeof ctx.ui?.onTerminalInput === "function") {
