@@ -68,6 +68,10 @@ async function main(): Promise<number> {
     console.log(JSON.stringify(await request("session.start", { project: flag("--project") }), null, 2));
     return 0;
   }
+  if (group === "session" && action === "toggle") { console.log(JSON.stringify(await request("session.toggle", { project: flag("--project") }), null, 2)); return 0; }
+  if (group === "session" && action === "pause") { console.log(JSON.stringify(await request("session.pause"), null, 2)); return 0; }
+  if (group === "session" && action === "resume") { console.log(JSON.stringify(await request("session.resume"), null, 2)); return 0; }
+  if (group === "session" && action === "switch") { console.log(JSON.stringify(await request("session.switch", { project: flag("--project") }), null, 2)); return 0; }
   if (group === "session" && action === "stop") {
     console.log(JSON.stringify(await request("session.stop", { session: flag("--session") }), null, 2));
     return 0;
@@ -145,7 +149,7 @@ async function main(): Promise<number> {
     console.log(JSON.stringify(await request("ingest", { events }), null, 2));
     return 0;
   }
-  throw new Error("usage: workspan status|engine [--check]|health|ingest --file f.jsonl|ingest-codex [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl [--require-clean]|projects|migrate --chunks f.jsonl --target db [--tracker-db pi.sqlite] [--map scope=project] [--apply]|session start --project P|session stop --session S");
+  throw new Error("usage: workspan status|engine [--check]|health|ingest --file f.jsonl|ingest-codex [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl [--require-clean]|projects|migrate --chunks f.jsonl --target db [--tracker-db pi.sqlite] [--map scope=project] [--apply]|session start|pause|resume|stop|switch|toggle --project P");
 }
 
 main().then(code => process.exit(code)).catch((error: unknown) => {

@@ -16,7 +16,9 @@ $XDG_RUNTIME_DIR/workspan/workspan.sock       the daemon socket, used by the CLI
 | --- | --- |
 | Bar | The strongest *attended* evidence (attested if any, else inferred) as `1:05`; dimmed with a dot when the daemon has stopped writing, plus an optional glyph |
 | Tooltip | All three measures side by side, and the sentence that they are never added together |
-| Popup | Session state and controls, each measure against the projects it is allocated to, unallocated and ambiguous evidence, coverage warnings |
+| Popup | Session controls (Start, Pause/Resume, Stop, Refresh), the session line with state and provisional time, each measure against the projects it is allocated to, unallocated and ambiguous evidence, coverage warnings |
+
+For a single key or menu row, `workspan session toggle` starts when nothing is open and stops what is open.
 
 Agent runtime never appears as the bar number: an agent running unattended is not
 time worked, so it is shown in the popup with its own label.

@@ -6,7 +6,7 @@
 import { createHash } from "node:crypto";
 
 export const EVIDENCE_VERSION = 1;
-export const KINDS = ["interaction", "agent-start", "agent-end", "session-start", "session-stop"] as const;
+export const KINDS = ["interaction", "agent-start", "agent-end", "session-start", "session-stop", "session-pause", "session-resume"] as const;
 export const ORIGINS = ["human", "automated", "attested", "unknown"] as const;
 
 /** Sources are namespaces, not vendor payloads: a value here names a `source_namespace`. */

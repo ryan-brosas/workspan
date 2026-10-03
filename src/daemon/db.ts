@@ -13,7 +13,8 @@ import { eventId, fingerprint, type EvidenceEvent, type Kind, type Origin } from
 export const SCHEMA_VERSION = 1;
 
 export interface Observation extends EvidenceEvent { eventId: string; receivedAt: number }
-export interface SessionRow { id: string; session: string; project: string | null; startedAt: number; endedAt: number | null; state: "running" | "stopped" }
+export interface SessionRow { id: string; session: string; project: string | null; startedAt: number; endedAt: number | null; state: "running" | "paused" | "stopped" }
+export interface SessionTransition { sessionId: string; kind: "pause" | "resume"; at: number }
 export interface ConflictRow { eventId: string; reason: string; detectedAt: number }
 export interface SourceHealth { source: string; events: number; cursor: number }
 export interface ProjectBinding { root: string; project: string; explicit: boolean; source: string }
@@ -35,6 +36,9 @@ create table if not exists conflicts (
 );
 create table if not exists sessions (
   id text primary key, source_session text not null, project text, started_at integer not null, ended_at integer, state text not null
+);
+create table if not exists session_transitions (
+  session_id text not null, kind text not null, at integer not null
 );
 create table if not exists windows (
   id text primary key, root text not null, client text not null, session_id text not null,
@@ -135,6 +139,19 @@ export class WorkspanStore implements WindowPort {
       if (row) this.db.prepare("update sessions set ended_at = ?, state = 'stopped' where id = ?").run(event.at, id);
       return;
     }
+    // Pause and resume are guarded by state, so a replayed command cannot record the
+    // same transition twice.
+    if (event.kind === "session-pause" || event.kind === "session-resume") {
+      const id = sessionKey(event);
+      const row = this.db.prepare("select state from sessions where id = ?").get(id) as { state: string } | undefined;
+      const expected = event.kind === "session-pause" ? "running" : "paused";
+      const next = event.kind === "session-pause" ? "paused" : "running";
+      if (row && row.state === expected) {
+        this.db.prepare("update sessions set state = ? where id = ?").run(next, id);
+        this.db.prepare("insert into session_transitions(session_id, kind, at) values(?,?,?)").run(id, event.kind.slice("session-".length), event.at);
+      }
+      return;
+    }
     // Inferred windows are not an effect of ingest: the daemon drives
     // core/clock.ts for human-origin interaction, so window policy has exactly
     // one implementation and this store stays a store.
@@ -169,12 +186,18 @@ export class WorkspanStore implements WindowPort {
   windows(): ClockWindow[] {
     return (this.db.prepare("select * from windows order by start asc, rowid asc").all() as Record<string, unknown>[]).map(windowFromRow);
   }
-  sessionRows(): SessionRow[] {
-    return (this.db.prepare("select * from sessions order by started_at asc").all() as Record<string, unknown>[]).map(row => ({
-      id: String(row.id), session: String(row.source_session), project: row.project === null ? null : String(row.project),
-      startedAt: Number(row.started_at), endedAt: row.ended_at === null ? null : Number(row.ended_at),
-      state: String(row.state) as SessionRow["state"],
+  /** The open session, if one is running or paused. */
+  openSession(): SessionRow | null {
+    const row = this.db.prepare("select * from sessions where state != 'stopped' order by started_at desc limit 1").get() as Record<string, unknown> | undefined;
+    return row ? sessionRow(row) : null;
+  }
+  sessionTransitions(): SessionTransition[] {
+    return (this.db.prepare("select * from session_transitions order by at asc").all() as Record<string, unknown>[]).map(row => ({
+      sessionId: String(row.session_id), kind: String(row.kind) as SessionTransition["kind"], at: Number(row.at),
     }));
+  }
+  sessionRows(): SessionRow[] {
+    return (this.db.prepare("select * from sessions order by started_at asc").all() as Record<string, unknown>[]).map(sessionRow);
   }
   conflictRows(): ConflictRow[] {
     return (this.db.prepare("select * from conflicts order by detected_at asc").all() as Record<string, unknown>[]).map(row => ({
@@ -231,6 +254,14 @@ export function clockScope(attribution: { root?: string; project?: string }, ses
     client: attribution.project ?? "unallocated",
     sessionId: session,
     task: attribution.project ?? "unlabeled",
+  };
+}
+
+function sessionRow(row: Record<string, unknown>): SessionRow {
+  return {
+    id: String(row.id), session: String(row.source_session), project: row.project === null || row.project === undefined ? null : String(row.project),
+    startedAt: Number(row.started_at), endedAt: row.ended_at === null || row.ended_at === undefined ? null : Number(row.ended_at),
+    state: String(row.state) as SessionRow["state"],
   };
 }
 

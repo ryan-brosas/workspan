@@ -117,7 +117,7 @@ export interface Status {
   engine: EngineInfo | null;
   measures: Record<MeasureName, MeasureStatus>;
   /** `id` is the internal key; `session` is what session.stop takes back. */
-  current_session: { id: string; session: string; project: string | null; started_at: number; provisional_ms: number } | null;
+  current_session: { id: string; session: string; project: string | null; started_at: number; state: "running" | "paused"; paused_ms: number; paused_at: number | null; provisional_ms: number } | null;
   coverage: {
     events: number;
     conflicts: number;
@@ -161,7 +161,7 @@ interface Projection {
   measures: Record<MeasureName, MeasureStatus>;
   coverage: Status["coverage"];
   /** Cached without the provisional duration, which is a function of the current time. */
-  session: { id: string; session: string; project: string | null; started_at: number } | null;
+  session: { id: string; session: string; project: string | null; started_at: number; state: "running" | "paused"; paused_ms: number; paused_at: number | null } | null;
   observations: number;
   conflicts: number;
 }
@@ -180,23 +180,67 @@ function projectionKey(store: WorkspanStore, options: { idleGapMs: number; engin
   return store.revision() + "|" + options.idleGapMs + "|" + engine;
 }
 
+/**
+ * The active spans of a session: its interval minus every pause. A paused span is not
+ * attested work, and a session stopped while paused keeps no trailing span.
+ */
+export function activeSpans(startedAt: number, endedAt: number, transitions: ReadonlyArray<{ kind: "pause" | "resume"; at: number }>): Array<{ start: number; end: number }> {
+  const spans: Array<{ start: number; end: number }> = [];
+  let cursor = startedAt;
+  let pausedAt: number | null = null;
+  for (const transition of transitions) {
+    if (transition.kind === "pause" && pausedAt === null) {
+      if (transition.at > cursor) spans.push({ start: cursor, end: Math.min(transition.at, endedAt) });
+      pausedAt = transition.at;
+    } else if (transition.kind === "resume" && pausedAt !== null) {
+      pausedAt = null;
+      cursor = Math.max(cursor, transition.at);
+    }
+  }
+  if (pausedAt === null && endedAt > cursor) spans.push({ start: cursor, end: endedAt });
+  return spans;
+}
+
+/** How much time before `boundary` was spent paused. An open pause is not counted: it is what freezes the clock. */
+export function pausedSpanMs(transitions: ReadonlyArray<{ kind: "pause" | "resume"; at: number }>, boundary: number): number {
+  let total = 0;
+  let pausedAt: number | null = null;
+  for (const transition of transitions) {
+    if (transition.kind === "pause" && pausedAt === null) pausedAt = transition.at;
+    else if (transition.kind === "resume" && pausedAt !== null) {
+      total += Math.max(0, Math.min(transition.at, boundary) - pausedAt);
+      pausedAt = null;
+    }
+  }
+  return total;
+}
+
 function computeProjection(store: WorkspanStore, options: { idleGapMs: number }): Projection {
   const observations = store.observations();
   const windows = store.windows();
   const sessions = store.sessionRows();
   const conflicts = store.conflictRows();
 
-  // Attested: only user-stated intervals. A running session is provisional.
+  // Attested: only user-stated intervals, minus the spans the user paused. A paused
+  // span is not attested work, and the provisional clock freezes while paused.
+  const transitions = store.sessionTransitions();
   const attested: Attributed[] = [];
   let openSessions = 0;
   let current: Projection["session"] = null;
   for (const row of sessions) {
+    const rowTransitions = transitions.filter(t => t.sessionId === row.id && t.at >= row.startedAt);
+    const openPause = rowTransitions.length % 2 === 1 ? rowTransitions[rowTransitions.length - 1].at : null;
+    // Completed pauses are excluded from the provisional total; the open pause is
+    // what freezes the clock, so it is not counted as paused time as well.
+    const pausedMs = pausedSpanMs(rowTransitions, openPause ?? Number.MAX_SAFE_INTEGER);
     if (row.endedAt === null) {
       openSessions++;
-      current = { id: row.id, session: row.session, project: row.project, started_at: row.startedAt };
+      current = { id: row.id, session: row.session, project: row.project, started_at: row.startedAt, state: row.state === "paused" ? "paused" : "running", paused_ms: pausedMs, paused_at: openPause };
       continue;
     }
-    attested.push({ start: row.startedAt, end: row.endedAt, project: row.project ?? undefined });
+    for (const span of activeSpans(row.startedAt, row.endedAt, rowTransitions)) {
+      attested.push({ start: span.start, end: span.end, project: row.project ?? undefined });
+    }
   }
 
   // Inferred: window evidence from human interaction, policy owned by core/clock.ts.
@@ -237,7 +281,12 @@ export function buildStatus(store: WorkspanStore, options: { idleGapMs: number; 
     idle_gap_ms: options.idleGapMs,
     engine: options.engine ?? null,
     measures: projection.measures,
-    current_session: projection.session ? { ...projection.session, provisional_ms: Math.max(0, now - projection.session.started_at) } : null,
+    current_session: projection.session
+      ? {
+        ...projection.session,
+        provisional_ms: Math.max(0, (projection.session.state === "paused" ? projection.session.paused_at ?? projection.session.started_at : now) - projection.session.started_at - projection.session.paused_ms),
+      }
+      : null,
     coverage: projection.coverage,
     watermark: { observations: projection.observations, conflicts: projection.conflicts },
     non_additive: NON_ADDITIVE_NOTE,

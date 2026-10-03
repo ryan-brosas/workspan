@@ -45,6 +45,7 @@ Panel {
   readonly property var warnings: Workspan.warnings(snapshot)
   readonly property string barText: Workspan.barLabel(snapshot)
   readonly property bool sessionOpen: !!(snapshot && snapshot.current_session)
+  readonly property bool sessionPaused: !!(snapshot && snapshot.current_session && snapshot.current_session.state === "paused")
 
   implicitWidth: vertical ? barSize : Math.max(barSize, barRow.implicitWidth + Style.space(12))
   implicitHeight: barSize
@@ -84,6 +85,11 @@ Panel {
   }
 
   function toggleSession() { root.sessionOpen ? root.stopSession() : root.startSession() }
+
+  function pauseOrResume() {
+    if (!root.sessionOpen) return
+    root.runCli(root.sessionPaused ? ["session", "resume"] : ["session", "pause"])
+  }
 
   FileView {
     id: statusView
@@ -233,12 +239,22 @@ Panel {
             spacing: Style.space(8)
 
             Button {
-              text: root.sessionOpen ? "Stop session" : "Start session"
+              text: root.sessionOpen ? (root.sessionPaused ? "Resume" : "Pause") : "Start session"
               bordered: true
               foreground: root.foreground
               fontFamily: root.fontFamily
               enabled: !root.busy
-              onClicked: root.toggleSession()
+              onClicked: root.sessionOpen ? root.pauseOrResume() : root.startSession()
+            }
+
+            Button {
+              visible: root.sessionOpen
+              text: "Stop"
+              bordered: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              enabled: !root.busy
+              onClicked: root.stopSession()
             }
 
             Button {

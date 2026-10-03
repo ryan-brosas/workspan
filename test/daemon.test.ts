@@ -120,6 +120,33 @@ test("the status file stays fresh while the daemon is alive", async () => {
   expect(again).toBeGreaterThanOrEqual(onDisk);
 });
 
+test("pause, resume and switch are idempotent and close segments cleanly", async () => {
+  setup();
+  // A toggle with nothing open starts; a second start is refused, not stacked.
+  expect(JSON.parse((await cli("session", "toggle", "--project", "coral")).stdout)).toMatchObject({ action: "started" });
+  const stacked = await cli("session", "start", "--project", "coral");
+  expect(stacked.code).toBe(1);
+  expect(stacked.stderr).toContain("session_open");
+  const started = JSON.parse((await cli("status")).stdout) as { current_session: { session: string } };
+  expect(JSON.parse((await cli("session", "pause")).stdout)).toMatchObject({ state: "paused" });
+  expect(JSON.parse((await cli("session", "pause")).stdout)).toMatchObject({ unchanged: true });
+  expect(JSON.parse((await cli("session", "resume")).stdout)).toMatchObject({ state: "running" });
+  expect(JSON.parse((await cli("session", "resume")).stdout)).toMatchObject({ unchanged: true });
+
+  const switched = JSON.parse((await cli("session", "switch", "--project", "other")).stdout) as { closed: string | null; project: string | null };
+  expect(switched.closed).toBe(started.current_session.session);
+  expect(switched.project).toBe("other");
+
+  const open = JSON.parse((await cli("status")).stdout) as { current_session: { project: string; state: string } | null; coverage: { open_sessions: number } };
+  expect(open.current_session).toMatchObject({ project: "other", state: "running" });
+  expect(open.coverage.open_sessions).toBe(1);
+
+  await cli("session", "stop");
+  const after = JSON.parse((await cli("status")).stdout) as { coverage: { open_sessions: number }; measures: { attested: { union_ms: number; projects: Array<{ project: string }> } } };
+  expect(after.coverage.open_sessions).toBe(0);
+  expect(after.measures.attested.projects.map(p => p.project).sort()).toEqual(["coral", "other"]);
+});
+
 test("a second daemon refuses to take over a live socket", async () => {
   setup();
   await expect(startDaemon({ store: new WorkspanStore(join(roots[0], "second.sqlite")), runtimeDir, idleGapMs: 900_000 })).rejects.toThrow(/already listening/);

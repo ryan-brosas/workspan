@@ -109,15 +109,13 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     };
   };
 
-  const manualEvent = (params: unknown, kind: "session-start" | "session-stop"): EvidenceEvent => {
-    const value = (params ?? {}) as { project?: unknown; session?: unknown; task?: unknown };
-    const at = now();
+  const manualEvent = (choice: { kind: "session-start" | "session-stop" | "session-pause" | "session-resume"; session?: string; project?: string }, at: number): EvidenceEvent => {
     return validateEvent({
       v: 1, source: "manual", instance: "cli",
-      session: typeof value.session === "string" && value.session ? value.session : `s-${at}`,
-      event: `${kind}-${at}-${Math.random().toString(36).slice(2, 10)}`,
-      kind, at, origin: "attested",
-      project: typeof value.project === "string" && value.project ? value.project : undefined,
+      session: choice.session ?? `s-${at}`,
+      event: `${choice.kind}-${at}-${Math.random().toString(36).slice(2, 10)}`,
+      kind: choice.kind, at, origin: "attested",
+      ...(choice.project ? { project: choice.project } : {}),
     });
   };
 
@@ -136,18 +134,74 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       case "ingest":
         return ok(id, ingestAll(params));
       case "session.start": {
-        const event = manualEvent(params, "session-start");
-        const receipt = store.ingest(event, now());
+        if (store.openSession()) throw new ProtocolError("session_open", "a session is already running; stop it or use session.switch");
+        const at = now();
+        const project = (params as { project?: unknown } | null)?.project as string | undefined;
+        const event = manualEvent({ kind: "session-start", project }, at);
+        const receipt = store.ingest(event, at);
         refresh();
-        // `session` is the value the caller passes back to session.stop; `key` is
-        // the internal identity, returned for diagnostics only.
-        return ok(id, { receipt, session: event.session, key: sessionKey(event), project: event.project ?? null, started_at: event.at });
+        // `session` is the value the caller passes to the other session commands;
+        // `key` is the internal identity, for diagnostics only.
+        return ok(id, { receipt, session: event.session, key: sessionKey(event), project: event.project ?? null, started_at: at });
+      }
+      case "session.pause": {
+        const open = store.openSession();
+        if (!open) throw new ProtocolError("no_open_session", "nothing is running");
+        if (open.state === "paused") return ok(id, { session: open.session, state: "paused", unchanged: true });
+        const at = now();
+        const receipt = store.ingest(manualEvent({ kind: "session-pause", session: open.session }, at), at);
+        refresh();
+        return ok(id, { receipt, session: open.session, state: "paused" });
+      }
+      case "session.resume": {
+        const open = store.openSession();
+        if (!open) throw new ProtocolError("no_open_session", "nothing is running");
+        if (open.state === "running") return ok(id, { session: open.session, state: "running", unchanged: true });
+        const at = now();
+        const receipt = store.ingest(manualEvent({ kind: "session-resume", session: open.session }, at), at);
+        refresh();
+        return ok(id, { receipt, session: open.session, state: "running" });
       }
       case "session.stop": {
-        const event = manualEvent(params, "session-stop");
-        const receipt = store.ingest(event, now());
+        const open = store.openSession();
+        const value = (params ?? {}) as { session?: unknown };
+        const session = typeof value.session === "string" && value.session ? value.session : open?.session;
+        if (!session) throw new ProtocolError("no_open_session", "nothing is running");
+        const at = now();
+        const event = manualEvent({ kind: "session-stop", session }, at);
+        const receipt = store.ingest(event, at);
         refresh();
-        return ok(id, { receipt, session: event.session, key: sessionKey(event) });
+        return ok(id, { receipt, session, key: sessionKey(event) });
+      }
+      case "session.toggle": {
+        // One command for a keybinding or a menu row: start when nothing is open,
+        // stop when something is. Idempotent in both directions.
+        const open = store.openSession();
+        const at = now();
+        if (open) {
+          const receipt = store.ingest(manualEvent({ kind: "session-stop", session: open.session }, at), at);
+          refresh();
+          return ok(id, { receipt, action: "stopped", session: open.session });
+        }
+        const project = (params as { project?: unknown } | null)?.project as string | undefined;
+        const event = manualEvent({ kind: "session-start", project }, at);
+        const receipt = store.ingest(event, at);
+        refresh();
+        return ok(id, { receipt, action: "started", session: event.session, project: event.project ?? null });
+      }
+      case "session.switch": {
+        // One call closes the old segment and opens the new one at the same instant:
+        // no hour is counted twice, and none is lost in between.
+        const at = now();
+        const project = (params as { project?: unknown } | null)?.project as string | undefined;
+        const open = store.openSession();
+        const events = [
+          ...(open ? [manualEvent({ kind: "session-stop", session: open.session }, at)] : []),
+          manualEvent({ kind: "session-start", session: `s-${at}`, project }, at),
+        ];
+        const receipts = events.map(event => store.ingest(event, at));
+        refresh();
+        return ok(id, { receipts, closed: open ? open.session : null, session: `s-${at}`, project: project ?? null });
       }
       default:
         throw new ProtocolError("unknown_method", `unknown method ${JSON.stringify(method)}`);

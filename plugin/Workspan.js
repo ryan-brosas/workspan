@@ -138,7 +138,8 @@ function sessionLine(status) {
   var session = status ? status.current_session : null
   if (!session) return "No session running"
   var project = session.project ? String(session.project) : "unallocated"
-  return project + " - " + formatDuration(session.provisional_ms) + " provisional"
+  var paused = session.state === "paused" ? " (paused)" : ""
+  return project + " - " + formatDuration(session.provisional_ms) + " provisional" + paused
 }
 
 function tooltip(status, nowMs, refreshSeconds) {
