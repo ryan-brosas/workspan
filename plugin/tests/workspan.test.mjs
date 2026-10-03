@@ -6,7 +6,7 @@ import vm from "node:vm"
 // explicit export list so the same source is testable without QML.
 const source = fs.readFileSync(new URL("../Workspan.js", import.meta.url), "utf8")
   .replace(/^\.pragma library\s*/, "")
-  + "\nmodule.exports = { NON_ADDITIVE, expandPath, parseStatus, measure, formatDuration, formatClock, verticalClock, barLabel, barLabelVertical, ageSeconds, staleness, isOffline, displayRows, measureCaveats, companyRows, warnings, sessionLine, tooltip, shortMessage, engineLine }\n"
+  + "\nmodule.exports = { NON_ADDITIVE, expandPath, parseStatus, measure, formatDuration, formatClock, verticalClock, barLabel, barLabelVertical, ageSeconds, staleness, isOffline, displayRows, measureCaveats, companyRows, dotHint, warnings, sessionLine, tooltip, shortMessage, engineLine }\n"
 const sandbox = { module: { exports: {} }, isFinite, Number, Math, JSON, String, Array, Object }
 vm.runInNewContext(source, sandbox, { filename: "Workspan.js" })
 const W = sandbox.module.exports
@@ -73,6 +73,16 @@ assert.deepEqual([...W.companyRows("not an array", null)], [])
 assert.deepEqual([...W.companyRows([], { ...status, current_session: { project: "workspan" } })], [])
 assert.deepEqual([...W.companyRows([{ project: "workspan", root: "/b" }], running).map(r => ({ project: String(r.project), active: r.active === true }))],
   [{ project: "workspan", active: false }])
+
+// The Dot nudge: presence only. Fresh and untracked shows; everything else hides.
+const dotPresence = { available: true, last_activity_at: NOW - 4 * 60_000 }
+assert.equal(W.dotHint(dotPresence, status, NOW), "Dot active 4m ago \u2014 not tracked")
+assert.equal(W.dotHint(dotPresence, running, NOW), "")
+assert.equal(W.dotHint({ available: true, last_activity_at: NOW - 30_000 }, status, NOW), "Dot active just now \u2014 not tracked")
+assert.equal(W.dotHint({ available: true, last_activity_at: NOW - 20 * 60_000 }, status, NOW), "")
+assert.equal(W.dotHint({ available: false, last_activity_at: NOW - 60_000 }, status, NOW), "")
+assert.equal(W.dotHint({ available: true }, status, NOW), "")
+assert.equal(W.dotHint(null, status, NOW), "")
 assert.match(W.tooltip(running, NOW, 30), /coral - 1h 05m provisional \(running\)/)
 assert.match(W.tooltip(pausedOpen, NOW, 30), /coral - 2m provisional \(paused\)/)
 

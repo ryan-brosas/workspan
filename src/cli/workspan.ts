@@ -235,6 +235,13 @@ async function main(): Promise<number> {
     console.log(JSON.stringify(report, null, 2));
     return 0;
   }
+  if (group === "signals") {
+    // Presence is not attendance: this says the app was used, never that anyone
+    // worked. Computed on demand, stored nowhere, and no measure ever sees it.
+    const { readDotPresence } = await import("./signals.ts");
+    console.log(JSON.stringify({ dot: readDotPresence() }, null, 2));
+    return 0;
+  }
   if (group === "ingest-codex") {
     // Reading another application's history is the adapter's job, and it is
     // read-only: no prompts, no item bodies, no error payloads are selected.
@@ -248,6 +255,9 @@ async function main(): Promise<number> {
       ...(flag("--db") ? { dbPath: flag("--db")! } : {}),
       ...(flag("--instance") ? { instance: flag("--instance")! } : {}),
     });
+    if (collected.summary.store === null) {
+      console.error("codex: no local thread history store found - local Codex usage is unavailable, not zero");
+    }
     if (args.includes("--dry-run")) {
       console.log(JSON.stringify({ ...collected.summary, dry_run: true, ingested: 0 }, null, 2));
       return 0;
@@ -263,7 +273,7 @@ async function main(): Promise<number> {
     console.log(JSON.stringify(await request("ingest", { events }), null, 2));
     return 0;
   }
-  throw new Error("usage: workspan daemon|status|engine [--check]|health|ingest --file f.jsonl|ingest-codex [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl [--require-clean]|projects|migrate --chunks f.jsonl --target db [--tracker-db pi.sqlite] [--map scope=project] [--apply]|session start|pause|resume|stop|switch|toggle --project P");
+  throw new Error("usage: workspan daemon|status|engine [--check]|health|ingest --file f.jsonl|ingest-codex [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl [--require-clean]|projects|signals|migrate --chunks f.jsonl --target db [--tracker-db pi.sqlite] [--map scope=project] [--apply]|session start|pause|resume|stop|switch|toggle --project P");
 }
 
 main().then(code => process.exit(code)).catch((error: unknown) => {

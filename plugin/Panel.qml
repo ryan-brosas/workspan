@@ -37,6 +37,8 @@ Panel {
   property var snapshot: null
   /** Bound companies for the popup picker, fetched when the popup opens. */
   property var companies: []
+  /** Dot last-activity, fetched on open: a nudge, never evidence. */
+  property var dotPresence: null
   property double nowMs: Date.now()
   property string lastError: ""
   property bool busy: false
@@ -44,6 +46,8 @@ Panel {
   readonly property string freshness: Workspan.staleness(snapshot, nowMs, refreshSeconds)
   readonly property bool online: freshness === "fresh"
   readonly property var warnings: Workspan.warnings(snapshot)
+  /** The caption line, empty when there is nothing to nudge about. */
+  readonly property string dotHint: Workspan.dotHint(root.dotPresence, root.snapshot, root.nowMs)
   readonly property string barText: root.vertical ? Workspan.barLabelVertical(root.snapshot) : Workspan.barLabel(root.snapshot)
   /** One entry per stacked line, the way the stock clock splits its vertical format. */
   readonly property var verticalLines: root.vertical ? root.barText.split("\n") : []
@@ -106,10 +110,17 @@ Panel {
     onLoadFailed: root.snapshot = null
   }
 
-  onOpenedChanged: if (opened) fetchCompanies()
+  onOpenedChanged: if (opened) {
+    fetchCompanies()
+    fetchSignals()
+  }
 
   function fetchCompanies() {
     if (!projectsProcess.running) projectsProcess.running = true
+  }
+
+  function fetchSignals() {
+    if (!signalsProcess.running) signalsProcess.running = true
   }
 
   function projectClicked(project) {
@@ -127,7 +138,33 @@ Panel {
         root.companies = Workspan.companyRows(bindings, root.snapshot)
       }
     }
-    stderr: StdioCollector { waitForEnd: true; onStreamFinished: root.companies = [] }
+    // Only a non-empty stderr is a failure: the empty case fires on every exit
+    // and must not wipe the rows stdout just delivered.
+    stderr: StdioCollector { id: projectsErr; waitForEnd: true
+      onStreamFinished: {
+        if (String(projectsErr.text || "").trim() !== "") root.companies = []
+      }
+    }
+  }
+
+  // Presence is not attendance: this one timestamp is read for the caption and
+  // nothing else. It is never stored and no measure ever sees it.
+  Process {
+    id: signalsProcess
+    running: false
+    command: [root.cliPath, "--socket", root.socketFile, "signals"]
+    stdout: StdioCollector { id: signalsOut; waitForEnd: true
+      onStreamFinished: {
+        var parsed = null
+        try { parsed = JSON.parse(String(signalsOut.text || "")) } catch (error) { parsed = null }
+        root.dotPresence = parsed && parsed.dot ? parsed.dot : null
+      }
+    }
+    stderr: StdioCollector { id: signalsErr; waitForEnd: true
+      onStreamFinished: {
+        if (String(signalsErr.text || "").trim() !== "") root.dotPresence = null
+      }
+    }
   }
 
   Timer {
@@ -242,6 +279,16 @@ Panel {
             width: parent.width
             spacing: Style.space(4)
             visible: root.companies.length > 0
+
+            Text {
+              // The Dot nudge: presence, never attendance. It says what the app
+              // left behind; only the user starts anything.
+              text: root.dotHint
+              visible: root.dotHint !== ""
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
 
             Text {
               text: "Project"

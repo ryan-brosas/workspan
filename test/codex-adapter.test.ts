@@ -1,9 +1,9 @@
 import { afterAll, expect, test } from "bun:test";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { collectCodexEvents, defaultCodexHistoryPath, readCodexTurns, TURN_QUERY, toEvidence } from "../src/adapters/codex.ts";
+import { collectCodexEvents, defaultCodexHistoryPath, discoverCodexHistoryPath, readCodexTurns, TURN_QUERY, toEvidence } from "../src/adapters/codex.ts";
 import { WorkspanStore } from "../src/daemon/db.ts";
 import { validateEvent } from "../src/daemon/evidence.ts";
 import { buildStatus } from "../src/daemon/measures.ts";
@@ -83,6 +83,57 @@ test("the window is honoured and the default path follows CODEX_HOME", () => {
   process.env.CODEX_HOME = "/tmp/codex-home";
   try { expect(defaultCodexHistoryPath()).toBe("/tmp/codex-home/thread_history_1.sqlite"); }
   finally { if (previous === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previous; }
+});
+
+test("the newest store that carries thread_turns answers, and freshness is reported", () => {
+  const since = 1_700_000_000_000;
+  const root = mkdtempSync(join(tmpdir(), "codex-discovery-"));
+  roots.push(root);
+  const sec = (ms: number) => Math.floor(ms / 1000);
+  const makeStore = (name: string, run: (db: DatabaseSync) => void) => {
+    const path = join(root, name);
+    const db = new DatabaseSync(path);
+    db.exec("create table thread_turns (thread_id text, turn_id text, started_at integer, completed_at integer)");
+    run(db);
+    db.close();
+    return path;
+  };
+
+  const older = makeStore("thread_history_0.sqlite", db => db.prepare("insert into thread_turns values('t-old','u-1',?,?)").run(sec(since - 30 * 86_400_000), sec(since - 30 * 86_400_000) + 60));
+  const newest = makeStore("thread_history_2.sqlite", db => db.prepare("insert into thread_turns values('t-new','u-1',?,?)").run(sec(since), sec(since) + 60));
+  // A newer file that is not a thread history must not answer.
+  const fake = join(root, "thread_history_9.sqlite");
+  new DatabaseSync(fake).close();
+  utimesSync(older, new Date(since - 30 * 86_400_000), new Date(since - 30 * 86_400_000));
+  utimesSync(newest, new Date(since), new Date(since));
+  utimesSync(fake, new Date(since + 60_000), new Date(since + 60_000));
+  expect(discoverCodexHistoryPath(root)).toBe(newest);
+
+  const previous = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = root;
+  try {
+    const { turns, summary } = readCodexTurns({ sinceMs: since - 86_400_000, now: since + 3 * 86_400_000 + 60_000 });
+    expect(turns.map(t => t.turnId)).toEqual(["u-1"]);
+    expect(summary.store).toBe(newest);
+    expect(summary.storeMtime).toBeGreaterThan(0);
+    expect(summary.lastTurnAt).toBe(since + 60_000);
+    expect(summary.staleDays).toBe(3);
+  } finally { if (previous === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previous; }
+});
+
+test("no store at all is unavailable, not zero", () => {
+  const previous = process.env.CODEX_HOME;
+  const empty = mkdtempSync(join(tmpdir(), "codex-empty-"));
+  roots.push(empty);
+  process.env.CODEX_HOME = empty;
+  try {
+    const { turns, summary } = readCodexTurns({ sinceMs: 0 });
+    expect(turns).toEqual([]);
+    expect(summary.store).toBeNull();
+    expect(summary.lastTurnAt).toBeNull();
+    expect(summary.staleDays).toBeNull();
+  } finally { if (previous === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previous; }
+  expect(discoverCodexHistoryPath(join(empty, "missing"))).toBeNull();
 });
 
 test("an end without a start is not evidence of a duration", () => {

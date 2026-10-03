@@ -165,6 +165,21 @@ function companyRows(bindings, status) {
   return rows.sort(function (a, b) { return a.project.localeCompare(b.project) })
 }
 
+/**
+ * The Dot nudge: Dot (the app's cloud side) leaves no local intervals, only a
+ * last-activity stamp. When it is fresh and nothing is being tracked, the popup
+ * says so - presence, never attendance, and it never starts anything.
+ */
+function dotHint(presence, status, nowMs) {
+  if (!presence || presence.available !== true) return ""
+  if (status && status.current_session) return ""
+  var at = number(presence.last_activity_at)
+  if (at === 0) return ""
+  var age = Number(nowMs) - at
+  if (!isFinite(age) || age < 0 || age > 15 * 60000) return ""
+  return "Dot active " + (age < 60000 ? "just now" : formatDuration(age) + " ago") + " \u2014 not tracked"
+}
+
 /** One line per thing the user must look at; empty means nothing needs review. */
 function warnings(status) {
   if (!status) return ["No status yet. Start the daemon: workspan daemon"]

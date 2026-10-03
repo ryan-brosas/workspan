@@ -30,6 +30,10 @@ three measures separately, never a sum.
 Agent runtime never appears as the bar number: an agent running unattended is not
 time worked, so it is shown in the popup with its own label.
 
+- A Dot nudge: when the ChatGPT app's Dot profile was active in the last 15
+  minutes and nothing is being tracked, the popup says so with a caption. It is
+  presence, not attendance - it starts nothing, names no client and stores nothing.
+
 ## Deliberate choices
 
 - **A status file, not a socket subscription.** `FileView` with `watchChanges` is
