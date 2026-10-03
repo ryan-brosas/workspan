@@ -129,6 +129,31 @@ test("evidence survives the daemon being down, and drains on restart", async () 
   expect(status.coverage.events).toBe(7);
 });
 
+test("two terminals in two projects stay separate sessions with per-root attribution", async () => {
+  setup();
+  const secondRoot = "/tmp/workspan-adapter-repo-b";
+  store!.bindProject(secondRoot, "beacon", true, "test");
+  const second = new WorkspanEmitter({ socketPath: join(runtimeDir, "workspan.sock"), instance: "test-host", spoolPath: spoolPath + ".b" });
+  // Two Pi processes - two terminals - each with its own session id and its own
+  // repository. Their evidence must never collapse into one session.
+  emitter!.emit({ what: "tick", at: base + 500_000, session: "terminal-a", root });
+  emitter!.emit({ what: "tick", at: base + 510_000, session: "terminal-a", root });
+  second.emit({ what: "tick", at: base + 520_000, session: "terminal-b", root: secondRoot });
+  second.emit({ what: "tick", at: base + 530_000, session: "terminal-b", root: secondRoot });
+  await emitter!.flush();
+  await second.flush();
+
+  const windows = store!.windows().filter(w => w.sessionId.startsWith("terminal-"));
+  expect(windows).toHaveLength(2);
+  expect(windows.map(w => [w.sessionId, w.client])).toEqual([["terminal-a", "coral"], ["terminal-b", "beacon"]]);
+  const status = readStatusFile(runtimeDir);
+  // Earlier tests in this file already attributed coral evidence, so assert the new
+  // terminal's contribution rather than the cumulative total.
+  expect(status.measures.inferred.projects).toEqual(expect.arrayContaining([{ project: "beacon", ms: 10_000 }]));
+  expect(status.measures.inferred.projects.find(p => p.project === "coral")?.ms).toBeGreaterThanOrEqual(10_000);
+  expect(status.measures.inferred.union_ms).toBeGreaterThanOrEqual(20_000);
+});
+
 test("a tick inside the same bucket is one identity, so a redelivery adds nothing", async () => {
   setup();
   emitter!.emit({ what: "tick", at: base + 400_000, session: "s1", root });

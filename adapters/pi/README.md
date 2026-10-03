@@ -36,6 +36,28 @@ sqlite3 /tmp/trial.sqlite "select kind, origin, count(*) from observations group
 Making it permanent means adding it to Pi's `settings.json`, which changes agent
 configuration — a separate, explicit step.
 
+## Multiple terminals and sessions
+
+Each Pi terminal is its own process, so two terminals are two adapter instances with
+separate identities from the start — a Herdr pane per project needs no configuration.
+Within one process, sessions change: switches, automation, resumed work.
+
+| Situation | What the adapter does |
+| --- | --- |
+| A new session starts | Its root is recorded under its own session id; the previous session's is untouched |
+| Terminal input | Attributed to whichever session is **live at that moment** — one handler, registered once, reads the live session rather than capturing the first one |
+| A switch is proposed | Only the spool is drained; a switch can be vetoed, so state survives it |
+| A session shuts down | Its root is forgotten; a late event from another session is unaffected |
+
+Concurrent sessions in different projects produce separate windows and separate
+attribution. If two sessions overlap in time *and* claim different projects, the
+overlapping segment is reported as ambiguous for review rather than split or
+doubled — one hour is never billed to two clients automatically.
+
+Verified live: two nested Pi sessions, two repositories, one trial daemon — two
+distinct session ids, two roots, and agent runtime attributed to each project from
+its binding.
+
 ## Coexistence
 
 Both the tracker and this adapter observe the same Pi sessions during the shadow

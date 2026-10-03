@@ -137,20 +137,47 @@ export class WorkspanEmitter {
   }
 }
 
+type SessionCtx = {
+  cwd?: string;
+  mode?: string;
+  sessionManager?: { getSessionId?: () => string | null };
+  ui?: { onTerminalInput?: (handler: (data: string) => { consume?: boolean; data?: string } | undefined) => () => void; notify?: (message: string, type?: "info" | "warning" | "error") => void };
+};
+
 export default function workspanPiAdapter(pi: ExtensionAPI): void {
   const socketPath = process.env.WORKSPAN_SOCKET
     ?? join(process.env.XDG_RUNTIME_DIR ?? "/run/user/1000", "workspan", "workspan.sock");
-  let session = "";
-  let root = "";
-  let emitter: WorkspanEmitter | undefined;
+  const emitter = new WorkspanEmitter({ socketPath });
 
-  const observe = (what: PresenceKind, at: number) => emitter?.emit({ what, at, session, ...(root ? { root } : {}) });
+  // One process can host several sessions over its life - switches, automation,
+  // resumed work - and more than one can be live at once. A second session must
+  // never inherit the first one's identity, so roots are keyed by session and
+  // terminal input attributes to whichever session is live when it happens.
+  const roots = new Map<string, string>();
+  let live: string | null = null;
+  let inputBound = false;
+
+  const sessionOf = (ctx?: SessionCtx): string | null => ctx?.sessionManager?.getSessionId?.() ?? live;
+  const rootOf = (ctx?: SessionCtx): string => {
+    const session = sessionOf(ctx);
+    if (session && roots.has(session)) return roots.get(session)!;
+    return repositoryRoot(ctx?.cwd ?? process.cwd());
+  };
+  const observe = (what: PresenceKind, at: number, ctx?: SessionCtx): void => {
+    const session = sessionOf(ctx);
+    if (!session) return;
+    const root = rootOf(ctx);
+    emitter.emit({ what, at, session, ...(root ? { root } : {}) });
+  };
 
   pi.on("session_start", (_event, ctx) => {
-    session = ctx.sessionManager?.getSessionId?.() ?? randomUUID();
-    root = repositoryRoot(ctx.cwd ?? process.cwd());
-    emitter = new WorkspanEmitter({ socketPath, notify: message => ctx.ui?.notify?.(message, "warning") });
-    if (ctx.mode === "tui" && typeof ctx.ui?.onTerminalInput === "function") {
+    const session = ctx.sessionManager?.getSessionId?.() ?? randomUUID();
+    roots.set(session, repositoryRoot(ctx.cwd ?? process.cwd()));
+    live = session;
+    // Registered once: the handler reads the live session when input happens, so a
+    // switched or concurrent session cannot capture another one's keystrokes.
+    if (!inputBound && ctx.mode === "tui" && typeof ctx.ui?.onTerminalInput === "function") {
+      inputBound = true;
       ctx.ui.onTerminalInput((data: string) => {
         if (isHumanInput(data)) observe("tick", Date.now());
         return undefined;
@@ -158,12 +185,21 @@ export default function workspanPiAdapter(pi: ExtensionAPI): void {
     }
   });
 
-  pi.on("agent_start", (_event, _ctx) => { observe("turn-start", Date.now()); });
-  pi.on("agent_settled", (_event, _ctx) => {
+  // A switch can be vetoed, so state survives it; only drain what is already spooled.
+  pi.on("session_before_switch", () => { void emitter.flush().catch(() => undefined); });
+  pi.on("session_shutdown", (_event, ctx) => {
+    void emitter.flush().catch(() => undefined);
+    const session = sessionOf(ctx);
+    if (session) roots.delete(session);
+    if (live === session) live = null;
+  });
+
+  pi.on("agent_start", (_event, ctx) => { observe("turn-start", Date.now(), ctx); });
+  pi.on("agent_settled", (_event, ctx) => {
     const at = Date.now();
-    observe("turn-end", at);
+    observe("turn-end", at, ctx);
     // Presence at settlement: the human saw the result, so the session stays open.
-    observe("tick", at);
-    void emitter?.flush().catch(() => undefined);
+    observe("tick", at, ctx);
+    void emitter.flush().catch(() => undefined);
   });
 }
