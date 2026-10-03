@@ -47,6 +47,14 @@ assert.equal(W.barLabel(null), "--")
 const agentOnly = { ...status, measures: { ...status.measures, attested: { union_ms: 0 }, inferred: { union_ms: 0 } } }
 assert.equal(W.barLabel(agentOnly), "0m")
 
+// An open session takes the bar: the user wants to see the clock they started.
+const running = { ...status, current_session: { project: "coral", provisional_ms: 3_600_000 + 5 * 60_000, state: "running" } }
+assert.equal(W.barLabel(running), "1:05")
+const pausedOpen = { ...status, current_session: { project: "coral", provisional_ms: 90_000, state: "paused", paused_at: 90_000 } }
+assert.equal(W.barLabel(pausedOpen), "2m")
+assert.match(W.tooltip(running, NOW, 30), /coral - 1h 05m provisional \(running\)/)
+assert.match(W.tooltip(pausedOpen, NOW, 30), /coral - 2m provisional \(paused\)/)
+
 assert.equal(W.staleness(status, NOW, 30), "fresh")
 assert.equal(W.staleness(status, NOW + 3 * 60_000, 30), "stale")
 assert.equal(W.staleness(null, NOW, 30), "missing")

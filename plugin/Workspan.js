@@ -59,11 +59,15 @@ function formatClock(ms) {
 }
 
 /**
- * The bar shows the strongest attended evidence, never a sum of measures: an
- * agent running unattended must not read as time worked.
+ * The bar shows a running session's provisional clock while one is open, and the
+ * strongest attended measure otherwise - never a sum of measures, so an agent
+ * running unattended must not read as time worked. Provisional is honest: the
+ * interval is not final until the session stops, and it freezes while paused.
  */
 function barLabel(status) {
   if (!status) return "--"
+  var session = status.current_session
+  if (session) return formatClock(session.provisional_ms)
   var attested = measure(status, "attested").unionMs
   var inferred = measure(status, "inferred").unionMs
   return formatClock(attested > inferred ? attested : inferred)
@@ -151,6 +155,10 @@ function tooltip(status, nowMs, refreshSeconds) {
     "Agent     " + formatDuration(measure(status, "agent").unionMs),
     "Separate measures, never added together."
   ]
+  if (status.current_session) {
+    var open = status.current_session
+    lines.unshift((open.project ? String(open.project) : "unallocated") + " - " + formatDuration(open.provisional_ms) + " provisional" + (open.state === "paused" ? " (paused)" : " (running)"))
+  }
   if (state === "stale") lines.unshift("Workspan: daemon not writing")
   return lines.join("\n")
 }
