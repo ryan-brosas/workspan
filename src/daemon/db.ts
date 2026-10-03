@@ -15,6 +15,21 @@ export const SCHEMA_VERSION = 1;
 export interface Observation extends EvidenceEvent { eventId: string; receivedAt: number }
 export interface SessionRow { id: string; session: string; project: string | null; root: string | null; startedAt: number; endedAt: number | null; state: "running" | "paused" | "stopped" }
 export interface SessionTransition { sessionId: string; kind: "pause" | "resume"; at: number }
+export interface SessionNote { sessionId: string; at: number; text: string }
+
+/**
+ * The one user-authored free-text field: what the person says they did. Bounded
+ * to a single line so it can never smuggle a document, and stored append-only so
+ * a correction adds a note instead of silently rewriting history.
+ */
+export const MAX_NOTE_CHARS = 200;
+export function noteText(raw: string): string {
+  const value = raw.trim();
+  if (!value) throw new Error("A note needs text");
+  if (value.length > MAX_NOTE_CHARS) throw new Error(`A note is at most ${MAX_NOTE_CHARS} characters`);
+  if (/[\u0000-\u001f\u007f\u0085\u2028\u2029]/.test(value)) throw new Error("A note must be a single line");
+  return value;
+}
 export interface ConflictRow { eventId: string; reason: string; detectedAt: number }
 export interface SourceHealth { source: string; events: number; cursor: number }
 export interface ProjectBinding { root: string; project: string; explicit: boolean; source: string }
@@ -39,6 +54,9 @@ create table if not exists sessions (
 );
 create table if not exists session_transitions (
   session_id text not null, kind text not null, at integer not null
+);
+create table if not exists session_notes (
+  session_id text not null, at integer not null, text text not null
 );
 create table if not exists windows (
   id text primary key, root text not null, client text not null, session_id text not null,
@@ -188,6 +206,12 @@ export class WorkspanStore implements WindowPort {
     return (this.db.prepare("select * from windows order by start asc, rowid asc").all() as Record<string, unknown>[]).map(windowFromRow);
   }
   /** The open session, if one is running or paused. */
+  /** The internal identity a note or command refers to, from the value the caller holds. */
+  sessionKeyFromValue(value: string): string {
+    const row = this.db.prepare("select id from sessions where source_session = ?").get(value) as { id: string } | undefined;
+    return row ? row.id : value;
+  }
+
   openSession(): SessionRow | null {
     const row = this.db.prepare("select * from sessions where state != 'stopped' order by started_at desc limit 1").get() as Record<string, unknown> | undefined;
     return row ? sessionRow(row) : null;
@@ -195,6 +219,18 @@ export class WorkspanStore implements WindowPort {
   sessionTransitions(): SessionTransition[] {
     return (this.db.prepare("select * from session_transitions order by at asc").all() as Record<string, unknown>[]).map(row => ({
       sessionId: String(row.session_id), kind: String(row.kind) as SessionTransition["kind"], at: Number(row.at),
+    }));
+  }
+
+  /** Notes attach to a session the caller has already resolved, so this never invents one. */
+  addSessionNote(sessionId: string, text: string, at: number): SessionNote {
+    const note = { sessionId, at, text: noteText(text) };
+    this.db.prepare("insert into session_notes(session_id, at, text) values(?,?,?)").run(sessionId, at, note.text);
+    return note;
+  }
+  sessionNotes(): SessionNote[] {
+    return (this.db.prepare("select * from session_notes order by at asc").all() as Record<string, unknown>[]).map(row => ({
+      sessionId: String(row.session_id), at: Number(row.at), text: String(row.text),
     }));
   }
   sessionRows(): SessionRow[] {

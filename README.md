@@ -20,6 +20,9 @@ bun src/daemon/main.ts --db /tmp/demo.sqlite --runtime-dir /tmp/demo-run &
 bun src/cli/workspan.ts --socket /tmp/demo-run/workspan.sock session start --project coral
 bun src/cli/workspan.ts --socket /tmp/demo-run/workspan.sock engine --check
 
+# Notes are the one stored free-text field, and only what the user types themselves:
+# bounded to one line of 200 characters, append-only, never auto-captured.
+
 # Before any migration: classify existing receipts read-only, importing nothing.
 bun src/cli/workspan.ts audit --turns exports/pi-worktime.jsonl --chunks exports/pi-worktime-chunks.jsonl --require-clean
 

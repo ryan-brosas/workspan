@@ -169,6 +169,27 @@ test("a root-derived session attributes from the binding, never from a hard-code
   await cli("session", "stop");
 });
 
+test("notes attach to the open session and survive stop through the CLI", async () => {
+  setup();
+  await cli("session", "start", "--project", "coral");
+  await cli("note", "reviewed the provider auth");
+  let status = JSON.parse((await cli("status")).stdout) as { current_session: { project: string } };
+  expect(status.current_session?.project).toBe("coral");
+
+  const stopped = await cli("session", "stop", "--note", "also patched the report");
+  expect(stopped.code).toBe(0);
+  expect(JSON.parse(stopped.stdout)).toMatchObject({ note: { text: "also patched the report" } });
+
+  // A note with nothing running is a clear error, not a silent drop.
+  const orphan = await cli("note", "nobody to attach to");
+  expect(orphan.code).toBe(1);
+  expect(orphan.stderr).toContain("nothing is running");
+
+  const notes = store!.sessionNotes();
+  expect(notes.map(n => n.text)).toEqual(["reviewed the provider auth", "also patched the report"]);
+  expect(notes.every(n => !/[\u0000-\u001f]/.test(n.text))).toBe(true);
+});
+
 test("a second daemon refuses to take over a live socket", async () => {
   setup();
   await expect(startDaemon({ store: new WorkspanStore(join(roots[0], "second.sqlite")), runtimeDir, idleGapMs: 900_000 })).rejects.toThrow(/already listening/);

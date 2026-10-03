@@ -8,6 +8,7 @@ import { connect } from "node:net";
 import { readFileSync } from "node:fs";
 import { socketPath as defaultSocket } from "../daemon/paths.ts";
 import { encodeFrame, parseResponse, PROTOCOL_VERSION, type Method } from "../protocol.ts";
+import type { Binding } from "./pick.ts";
 
 const args = process.argv.slice(2);
 const FLAGS = new Set(["--socket", "--project", "--root", "--explicit", "--session", "--file", "--db", "--since-days", "--since-hours", "--limit", "--instance", "--turns", "--chunks", "--target", "--map", "--tracker-db"]);
@@ -104,8 +105,32 @@ async function main(): Promise<number> {
   if (group === "session" && action === "pause") { console.log(JSON.stringify(await request("session.pause"), null, 2)); return 0; }
   if (group === "session" && action === "resume") { console.log(JSON.stringify(await request("session.resume"), null, 2)); return 0; }
   if (group === "session" && action === "switch") { console.log(JSON.stringify(await request("session.switch", await sessionParams()), null, 2)); return 0; }
+  if (group === "session" && action === "pick") {
+    // Outside-harness work: no terminal is focused, so the workspace cannot be
+    // derived. The user picks a company from their bindings on the shell's picker.
+    const { defaultRows, menuSelect, pickProject } = await import("./pick.ts");
+    const { bindings } = await request("projects") as { bindings: Binding[] };
+    const picked = pickProject(bindings, { rows: defaultRows, select: menuSelect });
+    if ("none" in picked) throw new Error("no project bindings yet; add one with: workspan projects bind <root> <project>");
+    if ("dismissed" in picked) return 0;
+    console.log(JSON.stringify(await request("session.switch", { project: picked.project }), null, 2));
+    return 0;
+  }
   if (group === "session" && action === "stop") {
-    console.log(JSON.stringify(await request("session.stop", { session: flag("--session") }), null, 2));
+    const note = flag("--note");
+    console.log(JSON.stringify(await request("session.stop", { session: flag("--session"), ...(note !== undefined ? { note } : {}) }), null, 2));
+    return 0;
+  }
+  if (group === "note") {
+    // One command while the session is open; --note on stop covers the common case.
+    const text = positional.slice(1).join(" ");
+    if (!text) throw new Error("usage: workspan note <what you did>");
+    console.log(JSON.stringify(await request("session.note", { note: text }), null, 2));
+    return 0;
+  }
+  if (group === "day") {
+    const report = await request("day", { ...(flag("--date") ? { date: flag("--date") } : {}), ...(flag("--tz") ? { timezone: flag("--tz") } : {}) }) as { text: string };
+    console.log(report.text);
     return 0;
   }
   if (group === "audit") {

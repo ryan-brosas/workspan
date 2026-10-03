@@ -20,6 +20,13 @@ $XDG_RUNTIME_DIR/workspan/workspan.sock       the daemon socket, used by the CLI
 
 For a single key or menu row, `workspan session toggle` starts when nothing is open and stops what is open.
 
+Outside-harness work (a browser, ChatGPT, a call) has no workspace to derive, so
+`workspan session pick` lists the bound companies on the shell's own picker and
+switches the session to the chosen one; `workspan note <text>` and
+`workspan session stop --note <text>` record what the time was for.
+`workspan day` renders the day: sessions with notes and excluded pauses, the
+three measures separately, never a sum.
+
 Agent runtime never appears as the bar number: an agent running unattended is not
 time worked, so it is shown in the popup with its own label.
 

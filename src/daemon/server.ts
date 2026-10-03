@@ -9,6 +9,7 @@ import { encodeFrame, fail, ok, parseRequest, PROTOCOL_VERSION, ProtocolError, t
 import { validateEvent, type EvidenceEvent } from "./evidence.ts";
 import { SCHEMA_VERSION, WorkspanStore, sessionKey, type IngestResult } from "./db.ts";
 import { buildStatus, scopeFor, type Status, type StatusCache } from "./measures.ts";
+import { renderDay } from "./day.ts";
 import { engineInfo, probeEngine } from "./engine.ts";
 import { socketPath as socketPathFor, statusPath } from "./paths.ts";
 
@@ -187,16 +188,27 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         refresh();
         return ok(id, { receipt, session: open.session, state: "running" });
       }
+      case "session.note": {
+        const open = store.openSession();
+        if (!open) throw new ProtocolError("no_open_session", "nothing is running");
+        const value = (params ?? {}) as { note?: unknown };
+        if (typeof value.note !== "string") throw new ProtocolError("bad_request", "a note needs text");
+        const note = store.addSessionNote(open.id, value.note, now());
+        // A note changes no measure, so the projection stays valid: no refresh.
+        return ok(id, { note, session: open.session });
+      }
       case "session.stop": {
         const open = store.openSession();
-        const value = (params ?? {}) as { session?: unknown };
+        const value = (params ?? {}) as { session?: unknown; note?: unknown };
         const session = typeof value.session === "string" && value.session ? value.session : open?.session;
         if (!session) throw new ProtocolError("no_open_session", "nothing is running");
         const at = now();
+        // The stop note lands first so the session still exists to attach it to.
+        const note = typeof value.note === "string" ? store.addSessionNote(store.sessionKeyFromValue(session), value.note, at) : null;
         const event = manualEvent({ kind: "session-stop", session }, at);
         const receipt = store.ingest(event, at);
         refresh();
-        return ok(id, { receipt, session, key: sessionKey(event) });
+        return ok(id, { receipt, session, key: sessionKey(event), ...(note ? { note } : {}) });
       }
       case "session.toggle": {
         // One command for a keybinding or a menu row: start when nothing is open,
@@ -227,6 +239,16 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         const receipts = events.map(event => store.ingest(event, at));
         refresh();
         return ok(id, { receipts, closed: open ? open.session : null, session: `s-${at}`, project: choice.project ?? null, root: choice.root ?? null });
+      }
+      case "day": {
+        // The report is rendered by the daemon, which owns the store; the CLI
+        // only prints the text. Fresh read, not the cached projection.
+        const value = (params ?? {}) as { date?: unknown; timezone?: unknown };
+        const report = renderDay(store, {
+          ...(typeof value.date === "string" && value.date ? { date: value.date } : {}),
+          ...(typeof value.timezone === "string" && value.timezone ? { timezone: value.timezone } : {}),
+        });
+        return ok(id, report);
       }
       default:
         throw new ProtocolError("unknown_method", `unknown method ${JSON.stringify(method)}`);

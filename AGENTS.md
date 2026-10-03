@@ -65,6 +65,10 @@ native lane, and the tests asserting the default lane will fail if it is set.
   projection is reused until evidence, policy or the idle gap changes; the live
   fields — generation time and a provisional session duration — are recomputed on
   every read. Caching them would freeze the timer.
+- **Notes are the only free text, and only from the person.** A session note is
+  user-authored attestation: single line, at most 200 characters, append-only, and
+  never auto-captured from titles, prompts, URLs or tool payloads. Everything else
+  stays metadata.
 - **Uncertainty stays visible.** A stopped daemon, an open turn, a conflict or an
   unallocated segment is reported, never smoothed into a confident number.
 

@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { WorkspanStore } from "../src/daemon/db.ts";
+import { MAX_NOTE_CHARS, noteText, WorkspanStore } from "../src/daemon/db.ts";
 import { validateEvent } from "../src/daemon/evidence.ts";
 import { buildStatus } from "../src/daemon/measures.ts";
 
@@ -69,6 +69,28 @@ test("stopping while paused keeps no trailing span", () => {
     s.ingest(event("session-pause", t0 + 60_000), 1);
     s.ingest(event("session-stop", t0 + 3_600_000), 1);
     expect(buildStatus(s, { idleGapMs: 900_000, now: t0 + 3_700_000 }).measures.attested.union_ms).toBe(60_000);
+  } finally { s.close(); }
+});
+
+test("a note is bounded, single-line and append-only", () => {
+  const s = store();
+  try {
+    expect(noteText("  fixed the provider auth  ")).toBe("fixed the provider auth");
+    expect(() => noteText("")).toThrow();
+    expect(() => noteText("x".repeat(MAX_NOTE_CHARS + 1))).toThrow("at most 200");
+    expect(() => noteText("line\u2028break")).toThrow("single line");
+    expect(() => noteText("line\nbreak")).toThrow("single line");
+
+    // Notes attach to the session the caller resolved; there is no open session
+    // here, and addSessionNote must not invent one - only record against an id.
+    s.ingest(event("session-start", t0), 1);
+    const row = s.sessionRows()[0];
+    s.addSessionNote(row.id, "reviewed the migration plan", t0 + 30_000);
+    s.addSessionNote(row.id, "correction: also patched the report", t0 + 60_000);
+    expect(s.sessionNotes()).toEqual([
+      { sessionId: row.id, at: t0 + 30_000, text: "reviewed the migration plan" },
+      { sessionId: row.id, at: t0 + 60_000, text: "correction: also patched the report" },
+    ]);
   } finally { s.close(); }
 });
 
