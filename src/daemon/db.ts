@@ -13,7 +13,15 @@ import { eventId, fingerprint, type EvidenceEvent, type Kind, type Origin } from
 export const SCHEMA_VERSION = 1;
 
 export interface Observation extends EvidenceEvent { eventId: string; receivedAt: number }
-export interface SessionRow { id: string; session: string; project: string | null; root: string | null; startedAt: number; endedAt: number | null; state: "running" | "paused" | "stopped" }
+export interface SessionRow { id: string; session: string; project: string | null; root: string | null; startedAt: number; endedAt: number | null; state: "running" | "paused" | "stopped"; removedAt: number | null; removedReason: string | null }
+
+/** A removal reason is required and bounded, like a note. */
+export function removalReason(raw: string): string {
+  const value = raw.trim();
+  if (!value) throw new Error("A removal needs a reason");
+  if (value.length > MAX_NOTE_CHARS) throw new Error(`A removal reason is at most ${MAX_NOTE_CHARS} characters`);
+  return value;
+}
 export interface SessionTransition { sessionId: string; kind: "pause" | "resume"; at: number }
 export interface SessionNote { sessionId: string; at: number; text: string }
 
@@ -90,6 +98,10 @@ export class WorkspanStore implements WindowPort {
     // being rebuilt: a ledger must survive its own schema learning.
     try { this.db.exec("alter table observations add column root text"); } catch { /* already present */ }
     try { this.db.exec("alter table sessions add column root text"); } catch { /* already present */ }
+    // Removal is a correction, not a hard delete: the row and its reason stay for
+    // audit, while every report treats it as absent.
+    try { this.db.exec("alter table sessions add column removed_at integer"); } catch { /* already present */ }
+    try { this.db.exec("alter table sessions add column removed_reason text"); } catch { /* already present */ }
     this.db.prepare("insert or ignore into meta(key, value) values('schema_version', ?)").run(String(SCHEMA_VERSION));
   }
 
@@ -213,8 +225,26 @@ export class WorkspanStore implements WindowPort {
   }
 
   openSession(): SessionRow | null {
-    const row = this.db.prepare("select * from sessions where state != 'stopped' order by started_at desc limit 1").get() as Record<string, unknown> | undefined;
+    const row = this.db.prepare("select * from sessions where state != 'stopped' and removed_at is null order by started_at desc limit 1").get() as Record<string, unknown> | undefined;
     return row ? sessionRow(row) : null;
+  }
+
+  /**
+   * Remove a stopped session as a recorded correction. The row and its reason
+   * stay in the ledger for audit; every measure and report skips it afterwards.
+   * A session can only be removed once, and never while it is open.
+   */
+  removeSession(key: string, reason: string, at: number): { row: SessionRow; alreadyRemoved: boolean } {
+    const id = this.sessionKeyFromValue(key);
+    const row = this.sessionRows().find(candidate => candidate.id === id);
+    if (!row) throw new Error("no such session");
+    if (row.removedAt !== null) return { row, alreadyRemoved: true };
+    if (row.state !== "stopped") throw new Error("a session can only be removed once it is stopped");
+    this.db.prepare("update sessions set removed_at = ?, removed_reason = ? where id = ? and removed_at is null")
+      .run(at, removalReason(reason), id);
+    this.bumpRevision();
+    const updated = this.sessionRows().find(candidate => candidate.id === id)!;
+    return { row: updated, alreadyRemoved: false };
   }
   sessionTransitions(): SessionTransition[] {
     return (this.db.prepare("select * from session_transitions order by at asc").all() as Record<string, unknown>[]).map(row => ({
@@ -300,6 +330,8 @@ function sessionRow(row: Record<string, unknown>): SessionRow {
     root: row.root === null || row.root === undefined ? null : String(row.root),
     startedAt: Number(row.started_at), endedAt: row.ended_at === null || row.ended_at === undefined ? null : Number(row.ended_at),
     state: String(row.state) as SessionRow["state"],
+    removedAt: row.removed_at === null || row.removed_at === undefined ? null : Number(row.removed_at),
+    removedReason: row.removed_reason === null || row.removed_reason === undefined ? null : String(row.removed_reason),
   };
 }
 

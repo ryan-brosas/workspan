@@ -210,6 +210,32 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         refresh();
         return ok(id, { receipt, session, key: sessionKey(event), ...(note ? { note } : {}) });
       }
+      case "session.remove": {
+        const value = (params ?? {}) as { session?: unknown; reason?: unknown };
+        const key = typeof value.session === "string" && value.session ? value.session : "";
+        if (!key) throw new ProtocolError("bad_request", "removal needs a session");
+        if (typeof value.reason !== "string") throw new ProtocolError("bad_request", "removal needs a reason");
+        const at = now();
+        try {
+          const removed = store.removeSession(key, value.reason, at);
+          refresh();
+          return ok(id, { removed: true, session: removed.row.session, project: removed.row.project, reason: removed.row.removedReason, ...(removed.alreadyRemoved ? { alreadyRemoved: true } : {}) });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const code = message.includes("no such session") ? "no_such_session"
+            : message.includes("only be removed once it is stopped") ? "session_open"
+            : "bad_request";
+          throw new ProtocolError(code, message);
+        }
+      }
+      case "session.list": {
+        const rows = store.sessionRows();
+        return ok(id, { sessions: rows.map(row => ({
+          session: row.session, project: row.project, root: row.root,
+          startedAt: row.startedAt, endedAt: row.endedAt, state: row.state,
+          removedAt: row.removedAt, removedReason: row.removedReason,
+        })) });
+      }
       case "session.toggle": {
         // One command for a keybinding or a menu row: start when nothing is open,
         // stop when something is. Idempotent in both directions.

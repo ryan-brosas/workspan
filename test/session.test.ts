@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MAX_NOTE_CHARS, noteText, WorkspanStore } from "../src/daemon/db.ts";
+import { MAX_NOTE_CHARS, noteText, removalReason, WorkspanStore } from "../src/daemon/db.ts";
 import { validateEvent } from "../src/daemon/evidence.ts";
 import { buildStatus } from "../src/daemon/measures.ts";
 
@@ -105,6 +105,41 @@ test("a switch closes the old segment and opens the new one at the same instant"
     expect(status.current_session?.project).toBe("other");
     expect(status.current_session?.provisional_ms).toBe(100_000);
     expect(status.coverage.open_sessions).toBe(1);
+  } finally { s.close(); }
+});
+
+test("a removal is a bounded, once-only correction that leaves attested hours", () => {
+  const s = store();
+  try {
+    expect(removalReason("  test session noise  ")).toBe("test session noise");
+    expect(() => removalReason("")).toThrow("needs a reason");
+    expect(() => removalReason("x".repeat(MAX_NOTE_CHARS + 1))).toThrow("at most 200");
+
+    s.ingest(event("session-start", t0, "rem", "coral-stuff"), 1);
+    s.ingest(event("session-stop", t0 + 30_000, "rem", "coral-stuff"), 1);
+    const row = s.sessionRows().find(candidate => candidate.session === "rem")!;
+
+    // An open session refuses removal: stop it first.
+    s.ingest(event("session-start", t0 + 60_000, "open2", "coral-stuff"), 1);
+    expect(() => s.removeSession("open2", "too soon", t0 + 70_000)).toThrow("stopped");
+    s.ingest(event("session-stop", t0 + 90_000, "open2", "coral-stuff"), 1);
+
+    const before = buildStatus(s, { idleGapMs: 900_000, now: t0 + 120_000 }).measures.attested.union_ms;
+    const removed = s.removeSession("rem", "agent verification noise", t0 + 100_000);
+    expect(removed.alreadyRemoved).toBe(false);
+    expect(removed.row.removedReason).toBe("agent verification noise");
+
+    // The attested union drops by exactly the removed session's 30 seconds.
+    const after = buildStatus(s, { idleGapMs: 900_000, now: t0 + 120_000 }).measures.attested.union_ms;
+    expect(before - after).toBe(30_000);
+
+    // Removing again is a visible no-op, and the row keeps its original reason.
+    const again = s.removeSession("rem", "second attempt", t0 + 110_000);
+    expect(again.alreadyRemoved).toBe(true);
+    expect(again.row.removedReason).toBe("agent verification noise");
+
+    // An unknown session is an error, never a silent success.
+    expect(() => s.removeSession("ghost", "nope", t0 + 111_000)).toThrow("no such session");
   } finally { s.close(); }
 });
 

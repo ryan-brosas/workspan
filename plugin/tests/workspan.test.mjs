@@ -6,7 +6,7 @@ import vm from "node:vm"
 // explicit export list so the same source is testable without QML.
 const source = fs.readFileSync(new URL("../Workspan.js", import.meta.url), "utf8")
   .replace(/^\.pragma library\s*/, "")
-  + "\nmodule.exports = { NON_ADDITIVE, expandPath, parseStatus, measure, formatDuration, formatClock, verticalClock, barLabel, barLabelVertical, ageSeconds, staleness, isOffline, displayRows, measureCaveats, warnings, sessionLine, tooltip, shortMessage, engineLine }\n"
+  + "\nmodule.exports = { NON_ADDITIVE, expandPath, parseStatus, measure, formatDuration, formatClock, verticalClock, barLabel, barLabelVertical, ageSeconds, staleness, isOffline, displayRows, measureCaveats, companyRows, warnings, sessionLine, tooltip, shortMessage, engineLine }\n"
 const sandbox = { module: { exports: {} }, isFinite, Number, Math, JSON, String, Array, Object }
 vm.runInNewContext(source, sandbox, { filename: "Workspan.js" })
 const W = sandbox.module.exports
@@ -45,6 +45,7 @@ assert.equal(W.formatClock(9 * 60_000), "9m")
 assert.equal(W.barLabel(status), "2:00")
 assert.equal(W.barLabel(null), "--")
 
+
 const agentOnly = { ...status, measures: { ...status.measures, attested: { union_ms: 0 }, inferred: { union_ms: 0 } } }
 assert.equal(W.barLabel(agentOnly), "0m")
 
@@ -63,6 +64,15 @@ assert.equal(W.barLabelVertical(running), "1h\n05m")
 assert.equal(W.barLabelVertical({ ...status, current_session: null }), "2h\n00m")
 assert.equal(W.barLabelVertical(pausedOpen), "2m")
 assert.equal(W.barLabelVertical(null), "--")
+
+// The popup company picker marks the active project and drops duplicates.
+const withCoralStuff = { ...status, current_session: { project: "coral-stuff", provisional_ms: 90_000, state: "running" } }
+assert.deepEqual([...W.companyRows([{ project: "coral-stuff", root: "/a" }, { project: "workspan", root: "/b" }, { project: "coral-stuff", root: "/c" }], withCoralStuff).map(r => ({ project: String(r.project), active: r.active === true }))],
+  [{ project: "coral-stuff", active: true }, { project: "workspan", active: false }])
+assert.deepEqual([...W.companyRows("not an array", null)], [])
+assert.deepEqual([...W.companyRows([], { ...status, current_session: { project: "workspan" } })], [])
+assert.deepEqual([...W.companyRows([{ project: "workspan", root: "/b" }], running).map(r => ({ project: String(r.project), active: r.active === true }))],
+  [{ project: "workspan", active: false }])
 assert.match(W.tooltip(running, NOW, 30), /coral - 1h 05m provisional \(running\)/)
 assert.match(W.tooltip(pausedOpen, NOW, 30), /coral - 2m provisional \(paused\)/)
 

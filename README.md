@@ -11,8 +11,8 @@ The local vertical slice exists and runs: an inherited Bend accounting core (`sr
 ```sh
 # The gates. Bend needs its pinned toolchain (never BEND_EXECUTABLE: that selects
 # the native lane, which is a deliberate choice rather than a default).
-bash scripts/install-bend-ci.sh /tmp/bend-ci
-export PATH=/tmp/bend-ci/bin:$PATH BEND_SOURCE_DIR=/tmp/bend-ci/source
+bash scripts/install-bend-ci.sh ~/.local/share/workspan/bend-ci
+export PATH=~/.local/share/workspan/bend-ci/bin:$PATH BEND_SOURCE_DIR=~/.local/share/workspan/bend-ci/source
 bun run build:check && bun run proof:check && bun test && bun run check
 
 # The slice itself.

@@ -69,8 +69,10 @@ export function renderDay(store: WorkspanStore, options: DayOptions = {}): DayRe
   const lines: string[] = [`Workspan day ${date} (${timezone})`, ""];
 
   lines.push("Attested sessions", "");
-  const daySessions = sessions.filter(row => localDayKey(row.startedAt, timezone) === date || localDayKey(row.endedAt ?? row.startedAt, timezone) === date);
-  if (!daySessions.length) lines.push("  none");
+  const inDay = sessions.filter(row => localDayKey(row.startedAt, timezone) === date || localDayKey(row.endedAt ?? row.startedAt, timezone) === date);
+  const daySessions = inDay.filter(row => row.removedAt === null);
+  const removedToday = inDay.filter(row => row.removedAt !== null);
+  if (!daySessions.length && !removedToday.length) lines.push("  none");
   for (const row of daySessions) {
     const project = row.project ?? "unallocated";
     const rowTransitions = transitions.filter(t => t.sessionId === row.id && t.at >= row.startedAt);
@@ -114,6 +116,7 @@ export function renderDay(store: WorkspanStore, options: DayOptions = {}): DayRe
   }
 
   const conflicts = store.conflictRows().length;
-  lines.push("", `Engine: Bend via the generated policy. Coverage: ${observations.length} events, ${conflicts} conflict(s)${conflicts > 0 ? " need review" : ""}.`);
+  const removals = removedToday.length > 0 ? `, ${removedToday.length} removed session(s) (corrected)` : "";
+  lines.push("", `Engine: Bend via the generated policy. Coverage: ${observations.length} events, ${conflicts} conflict(s)${conflicts > 0 ? " need review" : ""}${removals}.`);
   return { date, timezone, text: lines.join("\n") };
 }

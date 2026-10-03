@@ -190,6 +190,36 @@ test("notes attach to the open session and survive stop through the CLI", async 
   expect(notes.every(n => !/[\u0000-\u001f]/.test(n.text))).toBe(true);
 });
 
+test("session list and remove work through the CLI with visible provenance", async () => {
+  setup();
+  const started = JSON.parse((await cli("session", "start", "--project", "coral")).stdout) as { session: string };
+  await cli("session", "stop", "--note", "testing removal");
+
+  // A running session refuses removal; a stopped one needs a reason.
+  const second = JSON.parse((await cli("session", "start", "--project", "coral")).stdout) as { session: string };
+  const openRemove = await cli("session", "remove", "--session", second.session, "--reason", "too soon");
+  expect(openRemove.code).toBe(1);
+  expect(openRemove.stderr).toContain("stopped");
+  await cli("session", "stop");
+
+  const list = JSON.parse(JSON.stringify((await cli("session", "list")).stdout));
+  expect(list).toContain(started.session);
+  const noReason = await cli("session", "remove", "--session", started.session);
+  expect(noReason.code).toBe(1);
+  expect(noReason.stderr).toContain("reason");
+
+  const removed = JSON.parse((await cli("session", "remove", "--session", started.session, "--reason", "agent verification noise")).stdout) as { removed: boolean; reason: string };
+  expect(removed).toMatchObject({ removed: true, reason: "agent verification noise" });
+
+  // The cached projection invalidates: attested hours drop in the next status.
+  const status = JSON.parse((await cli("status")).stdout) as { measures: { attested: { union_ms: number } } };
+  expect(status.measures.attested.union_ms).toBeLessThan(60_000);
+
+  // The day report names the correction instead of hiding it.
+  const day = await cli("day", "--tz", "UTC");
+  expect(day.stdout).toContain("removed session(s) (corrected)");
+});
+
 test("a second daemon refuses to take over a live socket", async () => {
   setup();
   await expect(startDaemon({ store: new WorkspanStore(join(roots[0], "second.sqlite")), runtimeDir, idleGapMs: 900_000 })).rejects.toThrow(/already listening/);

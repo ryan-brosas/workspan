@@ -67,6 +67,11 @@ async function main(): Promise<number> {
     for (const binding of bindings) console.log(`${binding.explicit ? "explicit " : "provisional"}  ${binding.project.padEnd(28)} ${binding.root}  (${binding.source})`);
     return 0;
   }
+  if (group === "projects" && args.includes("--json")) {
+    const { bindings } = await request("projects") as { bindings: Array<{ root: string; project: string; explicit: boolean; source: string }> };
+    console.log(JSON.stringify(bindings));
+    return 0;
+  }
   if (group === "projects") {
     const { bindings } = await request("projects") as { bindings: Array<{ root: string; project: string; explicit: boolean; source: string }> };
     for (const binding of bindings) console.log(`${binding.explicit ? "explicit " : "provisional"}  ${binding.project.padEnd(28)} ${binding.root}  (${binding.source})`);
@@ -126,6 +131,22 @@ async function main(): Promise<number> {
     const text = positional.slice(1).join(" ");
     if (!text) throw new Error("usage: workspan note <what you did>");
     console.log(JSON.stringify(await request("session.note", { note: text }), null, 2));
+    return 0;
+  }
+  if (group === "session" && action === "remove") {
+    const session = flag("--session");
+    const reason = flag("--reason");
+    if (!session || !reason) throw new Error("usage: workspan session remove --session <id> --reason <why>");
+    console.log(JSON.stringify(await request("session.remove", { session, reason }), null, 2));
+    return 0;
+  }
+  if (group === "session" && action === "list") {
+    const result = await request("session.list") as { sessions: Array<{ session: string; project: string | null; state: string; removedAt: number | null; removedReason: string | null }> };
+    for (const row of result.sessions) {
+      const flag = row.removedAt !== null ? `  removed: ${row.removedReason}` : "";
+      console.log(`${row.session}  ${String(row.project ?? "unallocated").padEnd(24)} ${row.state.padEnd(8)}${flag}`);
+    }
+    if (!result.sessions.length) console.log("no sessions yet");
     return 0;
   }
   if (group === "day") {

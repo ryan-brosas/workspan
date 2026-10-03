@@ -23,8 +23,8 @@ Run these before treating the workspace as sound. Each was run on this host; the
 Bend gates need the pinned toolchain (see [docs/bend.md](docs/bend.md)):
 
 ```sh
-bash scripts/install-bend-ci.sh /tmp/bend-ci
-export PATH=/tmp/bend-ci/bin:$PATH BEND_SOURCE_DIR=/tmp/bend-ci/source
+bash scripts/install-bend-ci.sh ~/.local/share/workspan/bend-ci
+export PATH=~/.local/share/workspan/bend-ci/bin:$PATH BEND_SOURCE_DIR=~/.local/share/workspan/bend-ci/source
 
 bun run build:check   # generated policy matches its .bend sources
 bun run proof:check   # every stated audit law is proven

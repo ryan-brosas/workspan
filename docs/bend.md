@@ -41,11 +41,13 @@ bun src/cli/workspan.ts engine --check   # label, artifact digest, live probe
 
 The build-time `bend2` source is required only to regenerate the artifact or to
 build a native binary; the compiler on `PATH` alone is not enough. Fetch both into
-an isolated directory (never over an existing Bend installation):
+an isolated directory (never over an existing Bend installation). Prefer a durable
+location - `/tmp` is wiped on reboot, and the gate will complain until the toolchain
+is reinstalled:
 
 ```sh
-bash scripts/install-bend-ci.sh /tmp/bend-ci
-export PATH=/tmp/bend-ci/bin:$PATH BEND_SOURCE_DIR=/tmp/bend-ci/source
+bash scripts/install-bend-ci.sh ~/.local/share/workspan/bend-ci
+export PATH=~/.local/share/workspan/bend-ci/bin:$PATH BEND_SOURCE_DIR=~/.local/share/workspan/bend-ci/source
 ```
 
 ## Checks

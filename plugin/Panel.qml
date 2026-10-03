@@ -35,6 +35,8 @@ Panel {
 
   // ---------------------------------------------------------------- state
   property var snapshot: null
+  /** Bound companies for the popup picker, fetched when the popup opens. */
+  property var companies: []
   property double nowMs: Date.now()
   property string lastError: ""
   property bool busy: false
@@ -102,6 +104,30 @@ Panel {
     onFileChanged: reload()
     onLoaded: root.snapshot = Workspan.parseStatus(text())
     onLoadFailed: root.snapshot = null
+  }
+
+  onOpenedChanged: if (opened) fetchCompanies()
+
+  function fetchCompanies() {
+    if (!projectsProcess.running) projectsProcess.running = true
+  }
+
+  function projectClicked(project) {
+    root.runCli(root.sessionOpen ? ["session", "switch", "--project", project] : ["session", "start", "--project", project])
+  }
+
+  Process {
+    id: projectsProcess
+    running: false
+    command: [root.cliPath, "--socket", root.socketFile, "projects", "--json"]
+    stdout: StdioCollector { id: projectsOut; waitForEnd: true
+      onStreamFinished: {
+        var bindings = []
+        try { bindings = JSON.parse(String(projectsOut.text || "[]")) } catch (error) { bindings = [] }
+        root.companies = Workspan.companyRows(bindings, root.snapshot)
+      }
+    }
+    stderr: StdioCollector { waitForEnd: true; onStreamFinished: root.companies = [] }
   }
 
   Timer {
@@ -208,6 +234,58 @@ Panel {
             detail: root.online ? "" : "The daemon is not writing status. Start it with: workspan daemon"
             foreground: root.foreground
             fontFamily: root.fontFamily
+          }
+
+          // The company picker: what the menu row does, one click away in the
+          // popup. Clicking starts or switches, whichever the session needs.
+          Column {
+            width: parent.width
+            spacing: Style.space(4)
+            visible: root.companies.length > 0
+
+            Text {
+              text: "Project"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Repeater {
+              model: root.companies
+
+              Row {
+                id: companyRow
+                required property var modelData
+                width: panelContent.width
+                spacing: Style.space(4)
+
+                Rectangle {
+                  width: companyRow.modelData.active ? Style.space(3) : 0
+                  height: projectLabel.implicitHeight
+                  color: root.foreground
+                  visible: companyRow.modelData.active
+                }
+
+                Text {
+                  id: projectLabel
+                  text: companyRow.modelData.project
+                  color: companyRow.modelData.active ? root.foreground : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  width: parent.width - parent.spacing
+                  elide: Text.ElideRight
+
+                  MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                      root.projectClicked(companyRow.modelData.project)
+                      root.close()
+                    }
+                  }
+                }
+              }
+            }
           }
 
           Row {

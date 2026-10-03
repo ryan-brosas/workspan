@@ -230,6 +230,9 @@ function computeProjection(store: WorkspanStore, options: { idleGapMs: number })
   let openSessions = 0;
   let current: Projection["session"] = null;
   for (const row of sessions) {
+    // A removed session is a recorded correction: the row stays for audit, but
+    // it contributes no attested time and never becomes the current session.
+    if (row.removedAt !== null) continue;
     const rowTransitions = transitions.filter(t => t.sessionId === row.id && t.at >= row.startedAt);
     const openPause = rowTransitions.length % 2 === 1 ? rowTransitions[rowTransitions.length - 1].at : null;
     // Completed pauses are excluded from the provisional total; the open pause is

@@ -146,6 +146,25 @@ function engineLine(status) {
   return parts.join(" - ")
 }
 
+/**
+ * The popup company picker: one row per bound company, the active session's
+ * project marked. Clicking starts or switches, so the row never needs to know
+ * the difference - the widget decides that.
+ */
+function companyRows(bindings, status) {
+  var rows = []
+  var active = status && status.current_session ? String(status.current_session.project || "") : ""
+  var seen = {}
+  var list = Array.isArray(bindings) ? bindings : []
+  for (var i = 0; i < list.length; i++) {
+    var project = String(list[i] && list[i].project || "")
+    if (project === "" || seen[project]) continue
+    seen[project] = true
+    rows.push({ project: project, active: project === active })
+  }
+  return rows.sort(function (a, b) { return a.project.localeCompare(b.project) })
+}
+
 /** One line per thing the user must look at; empty means nothing needs review. */
 function warnings(status) {
   if (!status) return ["No status yet. Start the daemon: workspan daemon"]
