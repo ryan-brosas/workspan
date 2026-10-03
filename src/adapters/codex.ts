@@ -11,11 +11,11 @@
  * Replay is safe: event identity is derived from the Codex turn id, so running
  * the importer twice adds nothing.
  */
-import { readdirSync, statSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { EvidenceEvent } from "../daemon/evidence.ts";
+import { mtimeOf, newestStore, staleDaysOf, unavailable, type HarnessReader } from "./harness.ts";
 
 export interface CodexTurn { threadId: string; turnId: string; startedAtMs: number | null; completedAtMs: number | null }
 
@@ -56,10 +56,6 @@ function codexHomeDir(): string {
   return process.env.CODEX_HOME ?? join(homedir(), ".codex");
 }
 
-function mtimeOf(path: string): number | null {
-  try { const value = statSync(path).mtimeMs; return Number.isFinite(value) ? Math.round(value) : null; } catch { return null; }
-}
-
 /** A store this shape is a thread history; anything else is not a source. */
 function hasThreadTurns(path: string): boolean {
   try {
@@ -75,15 +71,7 @@ function hasThreadTurns(path: string): boolean {
  * `thread_turns` answers. None at all is "unavailable", never zero usage.
  */
 export function discoverCodexHistoryPath(home: string = codexHomeDir()): string | null {
-  let names: string[];
-  try { names = readdirSync(home); } catch { return null; }
-  const candidates = names
-    .filter(name => /^thread_history_\d+\.sqlite$/.test(name))
-    .map(name => ({ path: join(home, name), mtime: mtimeOf(join(home, name)) }))
-    .filter(candidate => candidate.mtime !== null)
-    .sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0));
-  for (const candidate of candidates) if (hasThreadTurns(candidate.path)) return candidate.path;
-  return null;
+  return newestStore(home, /^thread_history_\d+\.sqlite$/, hasThreadTurns);
 }
 
 /** Timing columns only. The select list is the privacy boundary and is tested as such. */
@@ -133,8 +121,7 @@ export function readCodexTurns(options: CodexCollectOptions = {}): { turns: Code
     const started = toMs(latest?.started);
     const completed = toMs(latest?.completed);
     const lastTurnAt = started === null ? completed : completed === null ? started : Math.max(started, completed);
-    const now = options.now ?? Date.now();
-    const staleDays = lastTurnAt === null ? null : Math.max(0, Math.floor((now - lastTurnAt) / 86_400_000));
+    const staleDays = staleDaysOf(options.now ?? Date.now(), lastTurnAt);
     return { turns, summary: { turns: turns.length, anomalies, endsWithoutStart, store: dbPath, storeMtime, lastTurnAt, staleDays } };
   } finally { db.close(); }
 }
@@ -160,3 +147,26 @@ export function collectCodexEvents(options: CodexCollectOptions = {}): { events:
   const to = events.reduce<number | null>((max, e) => (max === null || e.at > max ? e.at : max), null);
   return { events, summary: { ...summary, events: events.length, from, to } };
 }
+
+/** The registry entry: the Codex history as one harness among the others. */
+export const codexReader: HarnessReader = {
+  id: "codex",
+  source: "codex",
+  probe(options = {}) {
+    const dbPath = options.store ?? discoverCodexHistoryPath();
+    if (dbPath === null || mtimeOf(dbPath) === null) return unavailable();
+    // An empty window still answers freshness: the max query is the point.
+    const { summary } = readCodexTurns({ dbPath, sinceMs: options.now ?? Date.now(), now: options.now });
+    return { store: summary.store, storeMtime: summary.storeMtime, lastEventAt: summary.lastTurnAt, staleDays: summary.staleDays };
+  },
+  read(options = {}) {
+    const { events, summary } = collectCodexEvents({
+      ...(options.sinceMs !== undefined ? { sinceMs: options.sinceMs } : {}),
+      ...(options.limit !== undefined ? { limit: options.limit } : {}),
+      ...(options.instance !== undefined ? { instance: options.instance } : {}),
+      ...(options.now !== undefined ? { now: options.now } : {}),
+      ...(options.store !== undefined ? { dbPath: options.store } : {}),
+    });
+    return { events, summary: { ...summary, lastEventAt: summary.lastTurnAt } };
+  },
+};

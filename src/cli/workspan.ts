@@ -48,6 +48,36 @@ function request(method: Method, params?: unknown, id = `cli-${Date.now()}`): Pr
     client.on("error", error => fail(`cannot reach the Workspan daemon at ${socketFile} (${(error as NodeJS.ErrnoException).code ?? "error"}); start it with: workspan daemon`));
   });
 }
+/** The socket frame is capped at 64 KiB; a big import goes in batches that fit. */
+function batchEvents(events: readonly unknown[], maxBytes = 48_000): unknown[][] {
+  const batches: unknown[][] = [];
+  let current: unknown[] = [];
+  let size = 0;
+  for (const event of events) {
+    const bytes = JSON.stringify(event).length + 2;
+    if (current.length > 0 && size + bytes > maxBytes) { batches.push(current); current = []; size = 0; }
+    current.push(event);
+    size += bytes;
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
+
+/** Import in frame-sized batches; numeric counters merge, so the caller sees one result. */
+async function ingestBatched(events: readonly unknown[]): Promise<Record<string, number>> {
+  const totals: Record<string, number> = {};
+  const batches = batchEvents(events);
+  for (const batch of batches) {
+    const result = await request("ingest", { events: batch });
+    if (result && typeof result === "object") {
+      for (const [key, value] of Object.entries(result as Record<string, unknown>)) {
+        if (typeof value === "number") totals[key] = (totals[key] ?? 0) + value;
+      }
+    }
+  }
+  totals.batches = batches.length;
+  return totals;
+}
 
 async function main(): Promise<number> {
   const [group, action] = positional;
@@ -242,6 +272,37 @@ async function main(): Promise<number> {
     console.log(JSON.stringify({ dot: readDotPresence() }, null, 2));
     return 0;
   }
+  if (group === "harness") {
+    // Which local agent histories exist and how fresh they are - availability
+    // first, evidence later. Probing reads a store's metadata, never its records.
+    const { harnessReaders } = await import("../adapters/registry.ts");
+    const now = Date.now();
+    const readers = harnessReaders().map(reader => ({ id: reader.id, source: reader.source, ...reader.probe({ now }) }));
+    console.log(JSON.stringify({ readers }, null, 2));
+    return 0;
+  }
+  if (group === "ingest-harness") {
+    // One verb for every harness: each reader reports its own store and freshness,
+    // and a missing store is unavailable, never zero.
+    const { collectHarness } = await import("../adapters/registry.ts");
+    const days = Number(flag("--since-days") ?? NaN);
+    const hours = Number(flag("--since-hours") ?? NaN);
+    const windowMs = Number.isFinite(days) ? days * 86_400_000 : (Number.isFinite(hours) ? hours * 3_600_000 : 86_400_000);
+    const collected = collectHarness({
+      sinceMs: Date.now() - windowMs,
+      ...(Number.isFinite(Number(flag("--limit"))) ? { limit: Number(flag("--limit")) } : {}),
+      ...(flag("--id") ? { id: flag("--id")! } : {}),
+    });
+    const events = collected.flatMap(entry => entry.events);
+    const readers = collected.map(entry => ({ id: entry.id, source: entry.source, ...entry.summary }));
+    if (args.includes("--dry-run")) {
+      console.log(JSON.stringify({ readers, events: events.length, dry_run: true, ingested: 0 }, null, 2));
+      return 0;
+    }
+    const result = events.length ? await ingestBatched(events) : null;
+    console.log(JSON.stringify({ readers, events: events.length, ingest: result }, null, 2));
+    return 0;
+  }
   if (group === "ingest-codex") {
     // Reading another application's history is the adapter's job, and it is
     // read-only: no prompts, no item bodies, no error payloads are selected.
@@ -262,7 +323,7 @@ async function main(): Promise<number> {
       console.log(JSON.stringify({ ...collected.summary, dry_run: true, ingested: 0 }, null, 2));
       return 0;
     }
-    const result = await request("ingest", { events: collected.events });
+    const result = await ingestBatched(collected.events);
     console.log(JSON.stringify({ read: collected.summary, ingest: result }, null, 2));
     return 0;
   }
@@ -273,7 +334,7 @@ async function main(): Promise<number> {
     console.log(JSON.stringify(await request("ingest", { events }), null, 2));
     return 0;
   }
-  throw new Error("usage: workspan daemon|status|engine [--check]|health|ingest --file f.jsonl|ingest-codex [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl [--require-clean]|projects|signals|migrate --chunks f.jsonl --target db [--tracker-db pi.sqlite] [--map scope=project] [--apply]|session start|pause|resume|stop|switch|toggle --project P");
+  throw new Error("usage: workspan daemon|status|engine [--check]|health|ingest --file f.jsonl|ingest-codex [--since-days N] [--dry-run]|harness|ingest-harness [--id X] [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl [--require-clean]|projects|signals|migrate --chunks f.jsonl --target db [--tracker-db pi.sqlite] [--map scope=project] [--apply]|session start|pause|resume|stop|switch|toggle --project P");
 }
 
 main().then(code => process.exit(code)).catch((error: unknown) => {

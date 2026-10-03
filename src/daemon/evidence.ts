@@ -10,7 +10,7 @@ export const KINDS = ["interaction", "agent-start", "agent-end", "session-start"
 export const ORIGINS = ["human", "automated", "attested", "unknown"] as const;
 
 /** Sources are namespaces, not vendor payloads: a value here names a `source_namespace`. */
-export const SOURCES = ["pi", "codex", "desktop", "manual"] as const;
+export const SOURCES = ["pi", "codex", "opencode", "claude", "desktop", "manual"] as const;
 
 export type Kind = typeof KINDS[number];
 export type Origin = typeof ORIGINS[number];
