@@ -51,6 +51,12 @@ function request(method: Method, params?: unknown, id = `cli-${Date.now()}`): Pr
 async function main(): Promise<number> {
   const [group, action] = positional;
   if (group === "health") { console.log(JSON.stringify(await request("health"), null, 2)); return 0; }
+  if (group === "daemon") {
+    // The foreground daemon, as the packaged unit starts it. The daemon owns this
+    // process from here until it is signalled, so no exit path is taken.
+    await import("../daemon/main.ts");
+    return new Promise<number>(() => undefined);
+  }
   if (group === "status") { console.log(JSON.stringify(await request("status"), null, 2)); return 0; }
   if (group === "projects") {
     const { bindings } = await request("projects") as { bindings: Array<{ root: string; project: string; explicit: boolean; source: string }> };
@@ -149,7 +155,7 @@ async function main(): Promise<number> {
     console.log(JSON.stringify(await request("ingest", { events }), null, 2));
     return 0;
   }
-  throw new Error("usage: workspan status|engine [--check]|health|ingest --file f.jsonl|ingest-codex [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl [--require-clean]|projects|migrate --chunks f.jsonl --target db [--tracker-db pi.sqlite] [--map scope=project] [--apply]|session start|pause|resume|stop|switch|toggle --project P");
+  throw new Error("usage: workspan daemon|status|engine [--check]|health|ingest --file f.jsonl|ingest-codex [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl [--require-clean]|projects|migrate --chunks f.jsonl --target db [--tracker-db pi.sqlite] [--map scope=project] [--apply]|session start|pause|resume|stop|switch|toggle --project P");
 }
 
 main().then(code => process.exit(code)).catch((error: unknown) => {
