@@ -39,7 +39,9 @@ export function listClaudeTranscripts(dir: string, limit = 200): Array<{ path: s
       if (mtime !== null) out.push({ path, mtime });
     }
   }
-  return out.sort((a, b) => b.mtime - a.mtime).slice(0, limit);
+  // A tie on coarse filesystem timestamps is broken by path, so "the newest
+  // transcript" never depends on readdir order.
+  return out.sort((a, b) => b.mtime - a.mtime || a.path.localeCompare(b.path)).slice(0, limit);
 }
 
 export function discoverClaudeStore(home: string = defaultClaudeHome()): string | null {

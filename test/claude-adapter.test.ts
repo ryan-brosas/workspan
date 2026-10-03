@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildTurns, claudeProbe, readClaude, type TurnRecord } from "../src/adapters/claude.ts";
@@ -29,7 +29,8 @@ function fixture() {
   // One closed turn, then a trailing turn that has settled with age.
   const a = join(projects, "-tmp-repo");
   mkdirSync(a, { recursive: true });
-  writeFileSync(join(a, "sess-a.jsonl"), [
+  const aPath = join(a, "sess-a.jsonl");
+  writeFileSync(aPath, [
     line("user", T, repo, "sess-a"),
     line("assistant", T + 60_000, repo, "sess-a"),
     line("user", T + 10 * 60_000, repo, "sess-a"),
@@ -40,10 +41,15 @@ function fixture() {
   // also answers freshness.
   const b = join(projects, "-tmp-plain");
   mkdirSync(b, { recursive: true });
-  writeFileSync(join(b, "sess-b.jsonl"), [
+  const bPath = join(b, "sess-b.jsonl");
+  writeFileSync(bPath, [
     line("user", now - 30_000, plain, "sess-b"),
     line("assistant", now - 20_000, plain, "sess-b"),
   ].join("\n") + "\n");
+  // Filesystem timestamp resolution must not decide which transcript is newest:
+  // the plain session is written last but gets an explicit later mtime.
+  utimesSync(aPath, new Date(T + 11 * 60_000), new Date(T + 11 * 60_000));
+  utimesSync(bPath, new Date(now), new Date(now));
   return { repo, plain, projects, now };
 }
 
