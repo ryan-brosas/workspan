@@ -1,0 +1,49 @@
+# Workspan desktop collector — designed, NOT installed.
+#
+# This file is a specification of the collector's launch contract, not a deployment.
+# Nothing in the repository installs, enables or starts it: creating this file changes
+# nothing on the machine.
+#
+# Installing it is a separate, explicitly approved step (see packaging/README.md):
+#     install -Dm755 packaging/collector-ingest.sh ~/.local/share/workspan/collector-ingest.sh
+#     install -Dm644 packaging/workspan-collector.service ~/.config/systemd/user/workspan-collector.service
+#     systemctl --user daemon-reload
+#     systemctl --user enable --now workspan-collector.service
+#
+# It runs the collector and pipes its stdout into the ingest loop. Presence is an
+# annotation: nothing this unit writes can become hours.
+
+[Unit]
+Description=Workspan desktop presence collector
+Documentation=https://github.com/ryan-brosas/workspan
+PartOf=graphical-session.target
+After=graphical-session.target workspan.service
+# The daemon is the only writer; the collector's evidence is pointless without it.
+Wants=workspan.service
+
+[Service]
+Type=simple
+# Evidence lines go to the ingest loop, which spools them until the daemon accepts.
+ExecStart=/bin/bash -c '"%h/.local/bin/workspan-collector" presence --interval-ms 5000 --idle-timeout-ms 300000 | "%h/.local/share/workspan/collector-ingest.sh"'
+Restart=always
+RestartSec=5
+
+# ---------------------------------------------------------------------------
+# Sandboxing. The collector reads the compositor's coarse metadata and the seat's
+# idle state; it writes nothing but its stdout.
+# ---------------------------------------------------------------------------
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# The ingest loop's spool lives in the runtime directory — the only writable path.
+ReadWritePaths=%t/workspan
+# The compositor socket (hyprctl, Wayland) and the daemon socket are both AF_UNIX.
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=graphical-session.target

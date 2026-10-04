@@ -37,7 +37,8 @@ time worked, so it is shown in the popup with its own label.
   the popup says for how long, for 15 minutes after the seat woke. A stretch with no
   resume is not asserted - a stopped collector looks the same as a quiet desk - and
   the day report labels it `no resume recorded`. It pauses nothing and subtracts
-  nothing: whether that stretch was a break is the person's call.
+  nothing: whether that stretch was a break is the person's call. Answer it with
+  `workspan note --idle "lunch"`, which lands on the session the stretch fell in.
 
 ## Deliberate choices
 

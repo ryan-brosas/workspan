@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorkspanStore, type Observation } from "../src/daemon/db.ts";
 import { validateEvent, type EvidenceEvent } from "../src/daemon/evidence.ts";
-import { buildStatus, idleStretches, type StatusCache } from "../src/daemon/measures.ts";
+import { buildStatus, coveringSession, idleStretches, type StatusCache } from "../src/daemon/measures.ts";
+import type { SessionRow } from "../src/daemon/db.ts";
 import { renderDay } from "../src/daemon/day.ts";
 
 const roots: string[] = [];
@@ -25,6 +26,24 @@ function store(): WorkspanStore {
   roots.push(root);
   return new WorkspanStore(join(root, "workspan.sqlite"));
 }
+
+test("a review attaches to the session that covers the stretch, never to a removed one", () => {
+  const row = (over: Partial<SessionRow> & Pick<SessionRow, "id" | "session" | "startedAt" | "endedAt">): SessionRow => ({
+    project: "coral", root: null, state: over.endedAt === null ? "running" : "stopped", removedAt: null, removedReason: null, ...over,
+  });
+  const rows = [
+    row({ id: "a", session: "s-a", startedAt: t0, endedAt: t0 + HOUR }),
+    row({ id: "b", session: "s-b", startedAt: t0 + 2 * HOUR, endedAt: null }),
+    row({ id: "c", session: "s-c", startedAt: t0, endedAt: t0 + HOUR, removedAt: t0 + HOUR, removedReason: "noise" }),
+  ];
+  expect(coveringSession(rows, t0 + 60_000)?.session).toBe("s-a");
+  expect(coveringSession(rows, t0 + 3 * HOUR)?.session).toBe("s-b");
+  expect(coveringSession(rows, t0 - 60_000)).toBeNull();
+  // A removed session is a correction, not a place to put new evidence.
+  expect(coveringSession([rows[2]], t0 + 60_000)).toBeNull();
+  // Two overlapping intervals after a hand correction: the latest start was in effect.
+  expect(coveringSession([...rows, row({ id: "d", session: "s-d", startedAt: t0 + 30 * 60_000, endedAt: t0 + HOUR })], t0 + 45 * 60_000)?.session).toBe("s-d");
+});
 
 test("a quiet stretch starts at the stamp minus the timeout it waited out", () => {
   expect(idleStretches([idle(t0, 300_000), resumed(t0 + 900_000, 300_000)]))

@@ -7,8 +7,8 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, wri
 import { AutomaticClock } from "../core/clock.ts";
 import { encodeFrame, fail, ok, parseRequest, PROTOCOL_VERSION, ProtocolError, type Response } from "../protocol.ts";
 import { validateEvent, type EvidenceEvent } from "./evidence.ts";
-import { SCHEMA_VERSION, WorkspanStore, sessionKey, type IngestResult } from "./db.ts";
-import { buildStatus, scopeFor, type Status, type StatusCache } from "./measures.ts";
+import { SCHEMA_VERSION, WorkspanStore, sessionKey, type IngestResult, type SessionRow } from "./db.ts";
+import { buildStatus, coveringSession, idleStretches, scopeFor, type Status, type StatusCache } from "./measures.ts";
 import { renderDay } from "./day.ts";
 import { engineInfo, probeEngine } from "./engine.ts";
 import { socketPath as socketPathFor, statusPath } from "./paths.ts";
@@ -134,6 +134,24 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     });
   };
 
+  /**
+   * The moment a session command is about: the caller's stated `at`, or now. A stated
+   * moment is a correction - the ledger keeps both the claim and the receipt, and the
+   * day report says the entry was recorded later - so it may never be in the future.
+   */
+  const moment = (params: unknown): { at: number; recordedAt: number; stated: boolean } => {
+    const recordedAt = now();
+    const value = (params ?? {}) as { at?: unknown };
+    if (value.at === undefined) return { at: recordedAt, recordedAt, stated: false };
+    if (!Number.isSafeInteger(value.at) || (value.at as number) <= 0) throw new ProtocolError("bad_request", "at must be integer epoch milliseconds");
+    const at = value.at as number;
+    if (at > recordedAt) throw new ProtocolError("bad_request", "a session event cannot be recorded in the future");
+    return { at, recordedAt, stated: true };
+  };
+
+  const rowFor = (value: string): SessionRow | null =>
+    store.sessionRows().find(candidate => candidate.id === store.sessionKeyFromValue(value)) ?? null;
+
   const handle = (method: string, id: string, params: unknown): Response => {
     switch (method) {
       case "health":
@@ -161,54 +179,87 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         return ok(id, ingestAll(params));
       case "session.start": {
         if (store.openSession()) throw new ProtocolError("session_open", "a session is already running; stop it or use session.switch");
-        const at = now();
+        const when = moment(params);
         const choice = sessionChoice(params);
-        const event = manualEvent({ kind: "session-start", ...choice }, at);
-        const receipt = store.ingest(event, at);
+        const event = manualEvent({ kind: "session-start", ...choice }, when.at);
+        const receipt = store.ingest(event, when.recordedAt);
         refresh();
         // `session` is the value the caller passes to the other session commands;
         // `key` is the internal identity, for diagnostics only.
-        return ok(id, { receipt, session: event.session, key: sessionKey(event), project: event.project ?? null, root: event.root ?? null, started_at: at });
+        return ok(id, {
+          receipt, session: event.session, key: sessionKey(event), project: event.project ?? null, root: event.root ?? null,
+          started_at: when.at,
+          ...(when.stated ? { corrected: true, recorded_at: when.recordedAt } : {}),
+        });
       }
       case "session.pause": {
         const open = store.openSession();
         if (!open) throw new ProtocolError("no_open_session", "nothing is running");
         if (open.state === "paused") return ok(id, { session: open.session, state: "paused", unchanged: true });
-        const at = now();
-        const receipt = store.ingest(manualEvent({ kind: "session-pause", session: open.session }, at), at);
+        const when = moment(params);
+        if (when.at < open.startedAt) throw new ProtocolError("bad_request", "a pause cannot be recorded before the session started");
+        const receipt = store.ingest(manualEvent({ kind: "session-pause", session: open.session }, when.at), when.recordedAt);
         refresh();
-        return ok(id, { receipt, session: open.session, state: "paused" });
+        return ok(id, { receipt, session: open.session, state: "paused", ...(when.stated ? { corrected: true, recorded_at: when.recordedAt } : {}) });
       }
       case "session.resume": {
         const open = store.openSession();
         if (!open) throw new ProtocolError("no_open_session", "nothing is running");
         if (open.state === "running") return ok(id, { session: open.session, state: "running", unchanged: true });
-        const at = now();
-        const receipt = store.ingest(manualEvent({ kind: "session-resume", session: open.session }, at), at);
+        const when = moment(params);
+        if (when.at < open.startedAt) throw new ProtocolError("bad_request", "a resume cannot be recorded before the session started");
+        const receipt = store.ingest(manualEvent({ kind: "session-resume", session: open.session }, when.at), when.recordedAt);
         refresh();
-        return ok(id, { receipt, session: open.session, state: "running" });
+        return ok(id, { receipt, session: open.session, state: "running", ...(when.stated ? { corrected: true, recorded_at: when.recordedAt } : {}) });
       }
       case "session.note": {
-        const open = store.openSession();
-        if (!open) throw new ProtocolError("no_open_session", "nothing is running");
-        const value = (params ?? {}) as { note?: unknown };
+        const value = (params ?? {}) as { note?: unknown; session?: unknown; idle?: unknown };
         if (typeof value.note !== "string") throw new ProtocolError("bad_request", "a note needs text");
-        const note = store.addSessionNote(open.id, value.note, now());
+        const asked = typeof value.session === "string" && value.session ? value.session : null;
+        let target: SessionRow | null = null;
+        let idle: { from: number; to: number } | null = null;
+        if (value.idle === true) {
+          // The nudge's follow-up: the note belongs to the session the seat-idle
+          // stretch happened in, never to whatever happens to be open now.
+          const finished = idleStretches(store.observations()).filter(stretch => stretch.to !== null);
+          const stretch = finished.length ? finished[finished.length - 1] : null;
+          if (!stretch || stretch.to === null) throw new ProtocolError("no_idle_stretch", "no finished seat-idle stretch is on record");
+          idle = { from: stretch.from, to: stretch.to };
+          target = coveringSession(store.sessionRows(), stretch.from);
+          if (!target) throw new ProtocolError("no_covering_session", "no attested session covers that stretch; list them with: workspan session list");
+        } else if (asked !== null) {
+          target = rowFor(asked);
+          if (!target) throw new ProtocolError("no_such_session", `no session ${asked}`);
+        } else {
+          target = store.openSession();
+          if (!target) throw new ProtocolError("no_open_session", "nothing is running");
+        }
+        if (target.removedAt !== null) throw new ProtocolError("session_removed", "that session was removed as a correction");
+        const note = store.addSessionNote(target.id, value.note, now());
         // A note changes no measure, so the projection stays valid: no refresh.
-        return ok(id, { note, session: open.session });
+        return ok(id, { note, session: target.session, project: target.project, ...(idle ? { idle } : {}) });
       }
       case "session.stop": {
         const open = store.openSession();
         const value = (params ?? {}) as { session?: unknown; note?: unknown };
         const session = typeof value.session === "string" && value.session ? value.session : open?.session;
         if (!session) throw new ProtocolError("no_open_session", "nothing is running");
-        const at = now();
+        // A stop for a session that does not exist must be an error, not a silent no-op.
+        const row = rowFor(session);
+        if (!row) throw new ProtocolError("no_such_session", `no session ${session}`);
+        if (row.removedAt !== null) throw new ProtocolError("session_removed", "that session was removed as a correction");
+        const when = moment(params);
+        if (when.at < row.startedAt) throw new ProtocolError("bad_request", "a stop cannot be recorded before the session started");
         // The stop note lands first so the session still exists to attach it to.
-        const note = typeof value.note === "string" ? store.addSessionNote(store.sessionKeyFromValue(session), value.note, at) : null;
-        const event = manualEvent({ kind: "session-stop", session }, at);
-        const receipt = store.ingest(event, at);
+        const note = typeof value.note === "string" ? store.addSessionNote(row.id, value.note, when.recordedAt) : null;
+        const event = manualEvent({ kind: "session-stop", session }, when.at);
+        const receipt = store.ingest(event, when.recordedAt);
         refresh();
-        return ok(id, { receipt, session, key: sessionKey(event), ...(note ? { note } : {}) });
+        return ok(id, {
+          receipt, session, key: sessionKey(event), ...(note ? { note } : {}),
+          stopped_at: when.at,
+          ...(when.stated ? { corrected: true, recorded_at: when.recordedAt } : {}),
+        });
       }
       case "session.remove": {
         const value = (params ?? {}) as { session?: unknown; reason?: unknown };

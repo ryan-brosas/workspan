@@ -53,10 +53,15 @@ silently rewritten.
 ```sh
 workspan session toggle --project coral   # start or stop; attribution comes from bindings
 workspan note "reviewed the auth flow"    # the one free-text field, authored by you
+workspan note --idle "lunch with client"  # answer the popup nudge on the session the stretch fell in
+workspan session start --at 09:10         # correct a boundary afterwards; the day marks it
 workspan day                              # sessions, notes, pauses and the three measures
 ```
 
-On the desktop, the Omarchy bar widget shows the running clock and a popup with
+A native collector runs as a user service and writes coarse presence - focus changes,
+idle-inhibit, seat idle - into the ledger as annotations; none of it becomes hours, and
+a session boundary or a stretch can only be corrected by you (`--at`, `note --idle`),
+never automatically. On the desktop, the Omarchy bar widget shows the running clock and a popup with
 start/stop, the company picker and the current measures; one caption nudges when
 the ChatGPT Dot profile was recently active and nothing is being tracked, and another
 reports a finished stretch with no seat input. The idle caption pauses nothing: the

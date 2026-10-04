@@ -9,9 +9,10 @@ import { readFileSync } from "node:fs";
 import { socketPath as defaultSocket } from "../daemon/paths.ts";
 import { encodeFrame, parseResponse, PROTOCOL_VERSION, type Method } from "../protocol.ts";
 import type { Binding } from "./pick.ts";
+import { parseMoment } from "./moment.ts";
 
 const args = process.argv.slice(2);
-const FLAGS = new Set(["--socket", "--project", "--root", "--explicit", "--session", "--file", "--db", "--since-days", "--since-hours", "--limit", "--instance", "--turns", "--chunks", "--target", "--map", "--tracker-db"]);
+const FLAGS = new Set(["--socket", "--project", "--root", "--explicit", "--session", "--file", "--db", "--since-days", "--since-hours", "--limit", "--instance", "--turns", "--chunks", "--target", "--map", "--tracker-db", "--at"]);
 const flags = (name: string): string[] => {
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) if (args[i] === name && args[i + 1] !== undefined) out.push(args[i + 1]);
@@ -25,6 +26,12 @@ for (let i = 0; i < args.length; i++) {
   positional.push(args[i]);
 }
 const socketFile = flag("--socket") ?? defaultSocket();
+
+/** A stated correction moment. The daemon speaks epoch milliseconds; the person does not. */
+const moment = (): { at?: number } => {
+  const raw = flag("--at");
+  return raw === undefined ? {} : { at: parseMoment(raw, Date.now()) };
+};
 
 function request(method: Method, params?: unknown, id = `cli-${Date.now()}`): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -155,7 +162,7 @@ async function main(): Promise<number> {
 
   if (group === "session" && action === "start") {
     const { params, origin } = await sessionParams();
-    const result = (await request("session.start", params)) as SessionResult;
+    const result = (await request("session.start", { ...params, ...moment() })) as SessionResult;
     announce(result, origin, params);
     console.log(JSON.stringify(result, null, 2));
     return 0;
@@ -167,8 +174,8 @@ async function main(): Promise<number> {
     console.log(JSON.stringify(result, null, 2));
     return 0;
   }
-  if (group === "session" && action === "pause") { console.log(JSON.stringify(await request("session.pause"), null, 2)); return 0; }
-  if (group === "session" && action === "resume") { console.log(JSON.stringify(await request("session.resume"), null, 2)); return 0; }
+  if (group === "session" && action === "pause") { console.log(JSON.stringify(await request("session.pause", moment()), null, 2)); return 0; }
+  if (group === "session" && action === "resume") { console.log(JSON.stringify(await request("session.resume", moment()), null, 2)); return 0; }
   if (group === "session" && action === "switch") {
     const { params, origin } = await sessionParams();
     const result = (await request("session.switch", params)) as SessionResult;
@@ -189,14 +196,21 @@ async function main(): Promise<number> {
   }
   if (group === "session" && action === "stop") {
     const note = flag("--note");
-    console.log(JSON.stringify(await request("session.stop", { session: flag("--session"), ...(note !== undefined ? { note } : {}) }), null, 2));
+    console.log(JSON.stringify(await request("session.stop", { session: flag("--session"), ...(note !== undefined ? { note } : {}), ...moment() }), null, 2));
     return 0;
   }
   if (group === "note") {
     // One command while the session is open; --note on stop covers the common case.
+    // --session attaches to a past session, and --idle attaches to the session the
+    // last finished seat-idle stretch happened in - what the popup nudge asks for.
     const text = positional.slice(1).join(" ");
-    if (!text) throw new Error("usage: workspan note <what you did>");
-    console.log(JSON.stringify(await request("session.note", { note: text }), null, 2));
+    if (!text) throw new Error("usage: workspan note <what you did> [--session S | --idle]");
+    const target = flag("--session");
+    console.log(JSON.stringify(await request("session.note", {
+      note: text,
+      ...(target !== undefined ? { session: target } : {}),
+      ...(args.includes("--idle") ? { idle: true } : {}),
+    }), null, 2));
     return 0;
   }
   if (group === "session" && action === "remove") {
@@ -329,12 +343,16 @@ async function main(): Promise<number> {
   }
   if (group === "ingest") {
     const file = flag("--file");
-    if (!file) throw new Error("ingest needs --file <jsonl>");
-    const events = readFileSync(file, "utf8").split("\n").map(line => line.trim()).filter(Boolean).map(line => JSON.parse(line) as unknown);
+    // `--stdin` is how the collector ingest loop feeds evidence in: a pipe keeps the
+    // collector free of any transport of its own.
+    const piped = args.includes("--stdin");
+    if (!file && !piped) throw new Error("ingest needs --file <jsonl> or --stdin");
+    const text = file ? readFileSync(file, "utf8") : readFileSync(0, "utf8");
+    const events = text.split("\n").map(line => line.trim()).filter(Boolean).map(line => JSON.parse(line) as unknown);
     console.log(JSON.stringify(await request("ingest", { events }), null, 2));
     return 0;
   }
-  throw new Error("usage: workspan daemon|status|engine [--check]|health|ingest --file f.jsonl|ingest-codex [--since-days N] [--dry-run]|harness|ingest-harness [--id X] [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl [--require-clean]|projects|signals|migrate --chunks f.jsonl --target db [--tracker-db pi.sqlite] [--map scope=project] [--apply]|session start|pause|resume|stop|switch|toggle --project P");
+  throw new Error("usage: workspan daemon|status|engine [--check]|health|ingest --file f.jsonl|ingest-codex [--since-days N] [--dry-run]|harness|ingest-harness [--id X] [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl [--require-clean]|projects|signals|migrate --chunks f.jsonl --target db [--tracker-db pi.sqlite] [--map scope=project] [--apply]|session start|pause|resume|stop|switch|toggle --project P [--at HH:MM|ISO|ms]|note <text> [--session S | --idle]|day");
 }
 
 main().then(code => process.exit(code)).catch((error: unknown) => {

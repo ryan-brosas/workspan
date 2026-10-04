@@ -232,4 +232,84 @@ test("the CLI fails with a bounded message when no daemon is running", async () 
   expect(stderr).toContain("cannot reach the Workspan daemon");
 });
 
+test("a review note lands on the session the idle stretch happened in", async () => {
+  setup();
+  // A corrected session whose interval covers the stretch, and nothing open when the
+  // review happens: this is the delayed case the popup nudge asks about.
+  const t0 = Date.now() - 3 * 3_600_000;
+  const started = JSON.parse((await cli("session", "start", "--project", "coral", "--at", String(t0))).stdout) as { session: string };
+  await cli("session", "stop", "--at", String(t0 + 600_000));
+
+  const idleAt = t0 + 300_000;
+  const resumedAt = t0 + 420_000;
+  const file = join(roots[0], "idle.jsonl");
+  writeFileSync(file, [
+    JSON.stringify({ v: 1, source: "desktop", instance: "omarchy", session: "omarchy", event: `idle:${idleAt}:300000`, kind: "interaction", at: idleAt, origin: "unknown" }),
+    JSON.stringify({ v: 1, source: "desktop", instance: "omarchy", session: "omarchy", event: `resumed:${resumedAt}:300000`, kind: "interaction", at: resumedAt, origin: "unknown" }),
+  ].join("\n") + "\n");
+  expect(JSON.parse((await cli("ingest", "--file", file)).stdout)).toMatchObject({ accepted: 2, conflicts: 0 });
+
+  const before = JSON.parse((await cli("status")).stdout) as { measures: { attested: { union_ms: number } } };
+  const review = JSON.parse((await cli("note", "lunch with the client", "--idle")).stdout) as { session: string; project: string | null; idle: { from: number; to: number } };
+  expect(review.session).toBe(started.session);
+  expect(review.project).toBe("coral");
+  // The stretch began at the notification minus the timeout it waited out.
+  expect(review.idle).toEqual({ from: idleAt - 300_000, to: resumedAt });
+
+  // The note is an annotation: it closed nothing and moved no measure.
+  const after = JSON.parse((await cli("status")).stdout) as { measures: { attested: { union_ms: number } } };
+  expect(after.measures.attested.union_ms).toBe(before.measures.attested.union_ms);
+  const dayKey = new Date(t0).toISOString().slice(0, 10);
+  const day = await cli("day", "--tz", "UTC", "--date", dayKey);
+  expect(day.stdout).toContain("lunch with the client");
+
+  // A stretch no session covers is refused rather than attributed to a neighbour.
+  const gap = Date.now() - 2 * 3_600_000;
+  const uncovered = join(roots[0], "uncovered.jsonl");
+  writeFileSync(uncovered, [
+    JSON.stringify({ v: 1, source: "desktop", instance: "omarchy", session: "omarchy", event: `idle:${gap}:30000`, kind: "interaction", at: gap, origin: "unknown" }),
+    JSON.stringify({ v: 1, source: "desktop", instance: "omarchy", session: "omarchy", event: `resumed:${gap + 60_000}:30000`, kind: "interaction", at: gap + 60_000, origin: "unknown" }),
+  ].join("\n") + "\n");
+  await cli("ingest", "--file", uncovered);
+  const orphan = await cli("note", "nobody covers this", "--idle");
+  expect(orphan.code).toBe(1);
+  expect(orphan.stderr).toContain("no_covering_session");
+});
+
+test("a session boundary can be stated afterwards, and the report says so", async () => {
+  setup();
+  const t0 = Date.now() - 5 * 3_600_000;
+  const started = JSON.parse((await cli("session", "start", "--project", "coral", "--at", String(t0))).stdout) as { started_at: number; corrected: boolean; recorded_at: number };
+  expect(started.started_at).toBe(t0);
+  expect(started.corrected).toBe(true);
+  expect(started.recorded_at).toBeGreaterThan(t0);
+
+  const before = JSON.parse((await cli("status")).stdout) as { measures: { attested: { union_ms: number } } };
+  const stopped = JSON.parse((await cli("session", "stop", "--at", String(t0 + 3_600_000))).stdout) as { stopped_at: number; corrected: boolean };
+  expect(stopped.stopped_at).toBe(t0 + 3_600_000);
+  expect(stopped.corrected).toBe(true);
+
+  const after = JSON.parse((await cli("status")).stdout) as { measures: { attested: { union_ms: number } } };
+  // The stated hour is attested - the person's own claim is the evidence - and the
+  // union grew by exactly that hour, because nothing else covers those minutes.
+  expect(after.measures.attested.union_ms - before.measures.attested.union_ms).toBe(3_600_000);
+
+  const dayKey = new Date(t0).toISOString().slice(0, 10);
+  const day = await cli("day", "--tz", "UTC", "--date", dayKey);
+  expect(day.stdout).toContain("1h 00m");
+  expect(day.stdout).toContain("(recorded later)");
+
+  // A moment that has not happened is refused, and nothing is recorded by it.
+  const future = await cli("session", "start", "--at", String(Date.now() + 60_000));
+  expect(future.code).toBe(1);
+  expect(future.stderr).toContain("future");
+
+  // A stop cannot be recorded before its own session started.
+  await cli("session", "start", "--project", "coral");
+  const backwards = await cli("session", "stop", "--at", String(Date.now() - 6 * 3_600_000));
+  expect(backwards.code).toBe(1);
+  expect(backwards.stderr).toContain("before the session started");
+  await cli("session", "stop");
+});
+
 afterAll(async () => { if (daemon) await daemon.close(); for (const root of roots) rmSync(root, { recursive: true, force: true }); });

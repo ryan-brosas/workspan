@@ -4,7 +4,7 @@
  */
 import { reconcileIntervals } from "../core/native.ts";
 import type { Interval } from "../core/ledger.ts";
-import { clockScope, type Observation, type WorkspanStore } from "./db.ts";
+import { clockScope, type Observation, type SessionRow, type WorkspanStore } from "./db.ts";
 import type { EngineInfo } from "./engine.ts";
 
 export const MEASURES = ["attested", "inferred", "agent"] as const;
@@ -266,6 +266,23 @@ export function pausedSpanMs(transitions: ReadonlyArray<{ kind: "pause" | "resum
     }
   }
   return total;
+}
+
+/**
+ * The session whose wall interval covers `at`. This is what a review note attaches
+ * to, so a stretch is never attributed to whatever happens to be open now; pauses do
+ * not narrow the interval, because a note describes what a session was rather than
+ * what it counts, and the latest start wins if two intervals overlap after a manual
+ * correction. A removed session is a correction, not a place to put new evidence.
+ */
+export function coveringSession(rows: readonly SessionRow[], at: number): SessionRow | null {
+  let best: SessionRow | null = null;
+  for (const row of rows) {
+    if (row.removedAt !== null) continue;
+    const end = row.endedAt ?? Number.POSITIVE_INFINITY;
+    if (row.startedAt <= at && at <= end && (best === null || row.startedAt > best.startedAt)) best = row;
+  }
+  return best;
 }
 
 function computeProjection(store: WorkspanStore, options: { idleGapMs: number }): Projection {

@@ -11,7 +11,7 @@
 import { localDayKey } from "../core/ledger.ts";
 import { reconcileIntervals } from "../core/native.ts";
 import { activeSpans, agentIntervals, idleStretches, partitionByProject } from "../daemon/measures.ts";
-import type { WorkspanStore, SessionRow, SessionNote } from "../daemon/db.ts";
+import type { WorkspanStore, Observation, SessionRow, SessionNote } from "../daemon/db.ts";
 
 export interface DayOptions { date?: string; timezone?: string; now?: number }
 export interface DayReport { date: string; timezone: string; text: string }
@@ -54,6 +54,17 @@ const duration = (ms: number): string => {
   return hours <= 0 ? `${rest}m` : `${hours}h ${rest < 10 ? `0${rest}` : rest}m`;
 };
 
+/**
+ * Whether a session's own start or stop was written down much later than it states.
+ * That gap is the correction: the event time is the person's claim, the receipt time
+ * is when they made it, and neither is rewritten to match the other.
+ */
+function recordedLate(observations: readonly Observation[], row: SessionRow): boolean {
+  const late = (kind: "session-start" | "session-stop", when: number): boolean => observations.some(event =>
+    event.source === "manual" && event.kind === kind && event.session === row.session && event.at === when && event.receivedAt - event.at > 60_000);
+  return late("session-start", row.startedAt) || (row.endedAt !== null && late("session-stop", row.endedAt));
+}
+
 const clock = (at: number, timezone: string): string =>
   new Intl.DateTimeFormat("en-GB", { timeZone: timezone, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(at));
 
@@ -65,6 +76,7 @@ export function renderDay(store: WorkspanStore, options: DayOptions = {}): DayRe
   const sessions = store.sessionRows();
   const transitions = store.sessionTransitions();
   const notes = store.sessionNotes();
+  const observations = store.observations();
 
   const lines: string[] = [`Workspan day ${date} (${timezone})`, ""];
 
@@ -76,8 +88,11 @@ export function renderDay(store: WorkspanStore, options: DayOptions = {}): DayRe
   for (const row of daySessions) {
     const project = row.project ?? "unallocated";
     const rowTransitions = transitions.filter(t => t.sessionId === row.id && t.at >= row.startedAt);
+    // A session stated after the fact is still the person's evidence, and the report
+    // says so: the ledger keeps what was stated and when it was recorded.
+    const late = recordedLate(observations, row) ? "  (recorded later)" : "";
     if (row.endedAt === null) {
-      lines.push(`  ${clock(row.startedAt, timezone)}-open   ${project}  still running, provisional ${duration(Math.max(0, now - row.startedAt))}`);
+      lines.push(`  ${clock(row.startedAt, timezone)}-open   ${project}  still running, provisional ${duration(Math.max(0, now - row.startedAt))}${late}`);
     } else {
       const spans = clip(activeSpans(row.startedAt, row.endedAt, rowTransitions), bounds);
       const worked = spans.reduce((sum, span) => sum + (span.end - span.start), 0);
@@ -85,13 +100,12 @@ export function renderDay(store: WorkspanStore, options: DayOptions = {}): DayRe
         ? `${clock(spans[0].start, timezone)}-${clock(spans[0].end, timezone)}`
         : spans.map(span => `${clock(span.start, timezone)}-${clock(span.end, timezone)}`).join(", ");
       const paused = (row.endedAt - row.startedAt) - activeSpans(row.startedAt, row.endedAt, rowTransitions).reduce((sum, span) => sum + (span.end - span.start), 0);
-      lines.push(`  ${when || clock(row.startedAt, timezone)}   ${project}  ${duration(worked)}${paused > 0 ? `  (paused ${duration(paused)})` : ""}`);
+      lines.push(`  ${when || clock(row.startedAt, timezone)}   ${project}  ${duration(worked)}${paused > 0 ? `  (paused ${duration(paused)})` : ""}${late}`);
     }
     for (const note of notes.filter(n => n.sessionId === row.id)) lines.push(`    - ${note.text}`);
   }
 
   lines.push("", "Measures for the day (separate, never added together)", "");
-  const observations = store.observations();
   const windows = store.windows().filter(w => w.kind === "work");
   const measureData = {
     attested: daySessions.flatMap(row => {
