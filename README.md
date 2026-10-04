@@ -11,6 +11,7 @@ _One local accounting core for attested sessions, agent runtime and presence._
 </p>
 
 [![checks][checks-badge]][checks]
+[![release][release-badge]][releases]
 [![License: MIT][license-badge]](LICENSE)
 
 </div>
@@ -138,5 +139,7 @@ validated, and a changed shape is reported as unavailable.
 MIT — see [LICENSE](LICENSE).
 
 [checks-badge]: https://img.shields.io/github/actions/workflow/status/ryan-brosas/workspan/ci.yml?branch=main&style=for-the-badge&label=checks
+[release-badge]: https://img.shields.io/github/v/release/ryan-brosas/workspan?style=for-the-badge&label=release
+[releases]: https://github.com/ryan-brosas/workspan/releases
 [checks]: https://github.com/ryan-brosas/workspan/actions/workflows/ci.yml
 [license-badge]: https://img.shields.io/badge/license-MIT-2ea44f?style=for-the-badge
