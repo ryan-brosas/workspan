@@ -119,7 +119,7 @@ function unallocatedByRoot(intervals: readonly Attributed[]): Array<{ root: stri
     .sort((a, b) => b.ms - a.ms || a.root.localeCompare(b.root));
 }
 
-function measure(intervals: readonly Attributed[]): MeasureStatus {
+export function measure(intervals: readonly Attributed[]): MeasureStatus {
   const part = partitionByProject(intervals);
   const union = intervals.length === 0 ? 0 : reconcileIntervals([intervals.map(({ start, end }) => ({ start, end }))])[0];
   return {
@@ -133,7 +133,48 @@ function measure(intervals: readonly Attributed[]): MeasureStatus {
   };
 }
 
+/** One reader's last detection pass: availability first, evidence second. */
+export interface HarnessReaderStatus {
+  id: string;
+  source: string;
+  /** The store the reader found, or null: a missing store is unavailable, never zero. */
+  store: string | null;
+  available: boolean;
+  /** The latest moment the store knows about, inside the scanned window or not. */
+  last_event_at: number | null;
+  /** Whole days since that moment: "stale, not empty" in one number. */
+  stale_days: number | null;
+  /** Evidence the reader returned, and what ingest did with it. */
+  events: number;
+  accepted: number;
+  duplicates: number;
+  conflicts: number;
+  /** A reader that failed is named here; it never hides the others. */
+  error: string | null;
+}
+
+/**
+ * Automatic harness detection: which local agent histories were found, how fresh
+ * each is, and what the last pass imported. Detection and transport health only -
+ * never an attendance or runtime measure, and never added to one.
+ */
+export interface HarnessStatus {
+  /** 0 means automatic detection is off; `workspan harness` still probes on demand. */
+  interval_ms: number;
+  window_ms: number;
+  /** The last completed pass, or null: a daemon that just started has not scanned. */
+  polled_at: number | null;
+  took_ms: number | null;
+  /** A pass that failed before any reader reported is stated, not smoothed over. */
+  error: string | null;
+  readers: HarnessReaderStatus[];
+}
+
 export interface Status {
+  /** Transport health only, never attendance or another measure. */
+  delivery?: { pending_files: number; pending_bytes: number; issues: number };
+  /** Automatic harness detection: store metadata and import counts, never work. */
+  harness?: HarnessStatus;
   schema: 1;
   generated_at: number;
   idle_gap_ms: number;
@@ -261,7 +302,7 @@ export function inhibitStretches(observations: readonly Observation[]): IdleStre
  * the live fields cost nothing, so the two are separated and the projection is held
  * against a watermark, as the architecture specifies for derived views.
  */
-interface Projection {
+export interface Projection {
   measures: Record<MeasureName, MeasureStatus>;
   coverage: Status["coverage"];
   /** Cached without the provisional duration, which is a function of the current time. */
@@ -444,8 +485,7 @@ function uncoveredForDay(intervals: { attested: Attributed[]; inferred: Attribut
   return { today_ms: totalOf(stretches), stretches };
 }
 
-export function buildStatus(store: WorkspanStore, options: { idleGapMs: number; now?: number; engine?: EngineInfo; cache?: StatusCache; day?: { start: number; end: number } }): Status {
-  const now = options.now ?? Date.now();
+export function getProjection(store: WorkspanStore, options: { idleGapMs: number; engine?: EngineInfo; cache?: StatusCache }): Projection {
   const key = options.cache ? projectionKey(store, options) : "";
   let projection = options.cache?.key === key ? options.cache.projection : undefined;
   if (!projection) {
@@ -456,6 +496,12 @@ export function buildStatus(store: WorkspanStore, options: { idleGapMs: number; 
       options.cache.builds = (options.cache.builds ?? 0) + 1;
     }
   }
+  return projection;
+}
+
+export function buildStatus(store: WorkspanStore, options: { idleGapMs: number; now?: number; engine?: EngineInfo; cache?: StatusCache; day?: { start: number; end: number } }): Status {
+  const now = options.now ?? Date.now();
+  const projection = getProjection(store, options);
   return {
     schema: 1,
     generated_at: now,

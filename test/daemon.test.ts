@@ -100,7 +100,10 @@ test("a conflict is visible in the materialized status, not only in the receipt"
   setup();
   const conflictFile = join(roots[0], "conflict.jsonl");
   writeFileSync(conflictFile, JSON.stringify({ v: 1, source: "pi", instance: "laptop", session: "s1", event: "e1", kind: "interaction", at: base, origin: "human", project: "other-client" }) + "\n");
-  expect(JSON.parse((await cli("ingest", "--file", conflictFile)).stdout)).toMatchObject({ accepted: 0, conflicts: 1 });
+  const refused = await cli("ingest", "--file", conflictFile);
+  expect(JSON.parse(refused.stdout)).toMatchObject({ accepted: 0, conflicts: 1 });
+  expect(refused.code).toBe(1);
+  expect(refused.stderr).toContain("evidence_conflict");
 
   const status = JSON.parse((await cli("status")).stdout) as ReturnType<typeof readStatusFile>;
   expect(status.coverage.conflicts).toBe(1);

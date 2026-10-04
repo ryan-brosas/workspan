@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { WorkspanStore } from "../src/daemon/db.ts";
 import { validateEvent } from "../src/daemon/evidence.ts";
 import { dayBounds, renderDay } from "../src/daemon/day.ts";
+import { buildStatus } from "../src/daemon/measures.ts";
 
 const roots: string[] = [];
 const tz = "UTC";
@@ -76,3 +77,37 @@ test("a session crossing midnight is clipped to the day it is reported in", () =
   } finally { s.close(); }
 });
 
+
+test("fractional offsets and DST resolve exact local calendar boundaries", () => {
+  expect(dayBounds("2026-10-03", "Asia/Kathmandu").start).toBe(Date.parse("2026-10-02T18:15:00Z"));
+  expect(dayBounds("2026-10-03", "Asia/Kathmandu").end).toBe(Date.parse("2026-10-03T18:15:00Z"));
+  const spring = dayBounds("2026-03-08", "America/New_York");
+  const autumn = dayBounds("2026-11-01", "America/New_York");
+  expect(spring.end - spring.start).toBe(23 * 3_600_000);
+  expect(autumn.end - autumn.start).toBe(25 * 3_600_000);
+  expect(() => dayBounds("2026-02-30", "UTC")).toThrow();
+});
+
+test("a middle day of a long session contains its attested time", () => {
+  const s = store();
+  try {
+    const from = Date.parse("2026-10-01T09:00:00Z");
+    s.ingest(event("session-start", from, "long"), from);
+    s.ingest(event("session-stop", from + 4 * 86_400_000, "long"), from);
+    expect(renderDay(s, { date: "2026-10-03", timezone: tz }).text).toContain("Attested: 24h 00m");
+  } finally { s.close(); }
+});
+
+test("clipping keeps agent attribution and inferred ambiguity from the shared projection", () => {
+  const s = store();
+  try {
+    s.ingest(validateEvent({ source: "pi", instance: "i", session: "a", event: "start", kind: "agent-start", at: t0, origin: "automated", project: "client-b", root: "/b" }), t0);
+    s.ingest(validateEvent({ source: "pi", instance: "i", session: "a", event: "end", kind: "agent-end", at: t0 + 3_600_000, origin: "automated", project: "client-b", root: "/b" }), t0);
+    s.save({ id: "wa", root: "/a", client: "client-a", sessionId: "a", task: "a", start: t0, end: t0 + 7_200_000, kind: "work" });
+    s.save({ id: "wb", root: "/b", client: "client-b", sessionId: "b", task: "b", start: t0 + 1_800_000, end: t0 + 5_400_000, kind: "work" });
+    const report = renderDay(s, { date: "2026-10-03", timezone: tz });
+    expect(report.text).toContain("Agent runtime: 1h 00m (client-b 1h 00m)");
+    expect(report.text).toContain("Inferred attended: 2h 00m (client-a 1h 00m, ambiguous 1h 00m)");
+    expect(buildStatus(s, { idleGapMs: 900_000 }).measures.inferred.ambiguous_ms).toBe(3_600_000);
+  } finally { s.close(); }
+});

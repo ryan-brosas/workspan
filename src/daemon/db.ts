@@ -4,7 +4,7 @@
  * conflict rather than a silent overwrite.
  */
 import { DatabaseSync } from "node:sqlite";
-import { constants, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, closeSync } from "node:fs";
+import { constants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, closeSync, unlinkSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ClockWindow, WindowPort } from "../core/clock.ts";
@@ -297,6 +297,20 @@ export class WorkspanStore implements WindowPort {
     if (!root) return undefined;
     const row = this.db.prepare("select project from project_bindings where root = ?").get(root) as { project: string } | undefined;
     return row?.project;
+  }
+
+  /** Consistent standalone SQLite snapshot. The caller supplies a private directory. */
+  snapshotTo(path: string): void {
+    // VACUUM INTO accepts an empty file: reserve it exclusively so even an empty
+    // existing destination or dangling symlink can never be overwritten.
+    const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    try {
+      this.db.prepare("vacuum into ?").run(path);
+      fsyncSync(fd);
+    } catch (error) {
+      unlinkSync(path);
+      throw error;
+    } finally { closeSync(fd); }
   }
 
   close(): void { if (!this.closed) { this.closed = true; this.db.close(); } }

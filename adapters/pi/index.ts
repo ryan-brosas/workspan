@@ -66,7 +66,9 @@ interface EvidenceEvent { v: number; source: string; instance: string; session: 
 function toEvidence(observation: PresenceObservation, instance: string): EvidenceEvent {
   const base = { v: EVIDENCE_VERSION, source: "pi", instance, session: observation.session, at: observation.at, root: observation.root };
   if (observation.what === "tick") {
-    return { ...base, event: "tick-" + Math.floor(observation.at / TICK_MS), kind: "interaction", origin: "human" };
+    const bucket = Math.floor(observation.at / TICK_MS);
+    // Bucket identity requires bucket-stable metadata, including its timestamp.
+    return { ...base, at: bucket * TICK_MS, event: "tick-v2-" + bucket, kind: "interaction", origin: "human" };
   }
   // A settled turn is evidence a human was there to see it, so it carries presence
   // as well as runtime: work between questions belongs to the session.
@@ -88,7 +90,7 @@ export class WorkspanEmitter {
     this.spool = new EvidenceSpool({
       spoolPath: options.spoolPath ?? defaultSpoolPath(),
       socketPath: options.socketPath,
-      onFull: message => options.notify?.(message),
+      onFull: options.notify,
     });
   }
 

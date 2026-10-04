@@ -54,7 +54,7 @@ test("an undeliverable spool is kept, and a full one refuses loudly once", async
   expect(down.pendingBytes).toBeGreaterThan(0);
 
   const notices: string[] = [];
-  const tiny = new EvidenceSpool({ spoolPath: join(root, "tiny.jsonl"), socketPath, maxBytes: 10, onFull: message => notices.push(message) });
+  const tiny = new EvidenceSpool({ spoolPath: join(root, "tiny.jsonl"), socketPath, maxBytes: Buffer.byteLength(JSON.stringify(event("d", 1)) + "\n"), onFull: message => notices.push(message) });
   expect(tiny.append(event("d", 1))).toBe(true);
   expect(tiny.append(event("e", 2))).toBe(false);
   expect(tiny.append(event("f", 3))).toBe(false);

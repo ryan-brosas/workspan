@@ -7,7 +7,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { WorkspanClient, listSpools, spoolDirectory } from "../client.ts";
+import { WorkspanClient, listSpools, spoolDirectory, spoolProblems } from "../client.ts";
 import { defaultDatabasePath, defaultRuntimeDir, socketPath, statusPath } from "../daemon/paths.ts";
 import type { Status } from "../daemon/measures.ts";
 
@@ -88,6 +88,33 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
     const oldest = Math.min(...pending.map(file => { try { return statSync(file.path).mtimeMs; } catch { return now; } }));
     checks.push({ name: "adapter spools", state: "attention", detail: `${pending.length} file(s), ${bytes} bytes pending, oldest ${Math.round((now - oldest) / 1000)}s: evidence has not reached the daemon` });
   }
+
+  // Automatic harness detection: a pass older than three intervals means the scan
+  // stopped, and a store that was found is stated instead of silently absent.
+  const harness = status?.harness;
+  if (harness) {
+    const readers = `${harness.readers.length} reader(s), ${harness.readers.filter(reader => reader.available).length} store(s) detected`;
+    const failed = harness.readers.filter(reader => reader.error);
+    const age = harness.polled_at === null ? null : now - harness.polled_at;
+    const staleMs = Math.max(harness.interval_ms * 3, 60_000);
+    if (harness.interval_ms === 0) checks.push({ name: "harness detection", state: "ok", detail: "automatic detection is off (--no-harness); run workspan ingest-harness" });
+    else if (harness.error) checks.push({ name: "harness detection", state: "attention", detail: `${harness.error}; ${readers}` });
+    else if (failed.length) checks.push({ name: "harness detection", state: "attention", detail: `${failed.map(reader => `${reader.id}: ${reader.error}`).join("; ")}; ${readers}` });
+    else if (age === null) checks.push({ name: "harness detection", state: "unknown", detail: `no pass yet; ${readers}` });
+    else if (age > staleMs) checks.push({ name: "harness detection", state: "attention", detail: `last pass ${Math.round(age / 1000)}s ago, interval ${Math.round(harness.interval_ms / 1000)}s: the scan stopped; ${readers}` });
+    else {
+      const accepted = harness.readers.reduce((sum, reader) => sum + reader.accepted, 0);
+      checks.push({ name: "harness detection", state: "ok", detail: `${readers}, ${accepted} accepted in the last pass ${Math.round(age / 1000)}s ago` });
+    }
+  }
+
+  // Conflicts are review debt, not work: the record was retained, but an identity
+  // was replayed with different metadata. Reports warn about it too.
+  const conflicts = status?.coverage?.conflicts ?? 0;
+  if (conflicts) checks.push({ name: "evidence conflicts", state: "attention", detail: `${conflicts} record(s) retained for review; day/week reports warn with conflicting_evidence` });
+
+  const problems = spoolProblems(options.spoolDir ?? spoolDirectory());
+  if (problems.length) checks.push({ name: "evidence delivery", state: "attention", detail: `${problems.length} delivery/refusal marker(s): ${[...new Set(problems.map(problem => problem.code))].join(", ")}; inspect metadata in the spool directory` });
 
   const sources = status?.coverage?.sources ?? [];
   if (sources.length) {

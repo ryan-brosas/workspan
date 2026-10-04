@@ -56,6 +56,10 @@ workspan note "reviewed the auth flow"    # the one free-text field, authored by
 workspan note --idle "lunch with client"  # answer the popup nudge on the session the stretch fell in
 workspan session start --at 09:10         # correct a boundary afterwards; the day marks it
 workspan day                              # sessions, notes, pauses and the three measures
+workspan week --date 2026-10-03 --tz UTC   # local Monday–Sunday containing the date
+workspan day --json                       # exact millisecond facts, not rounded labels
+workspan week --export csv > week.csv     # also --export md; review, never automatic billing
+workspan backup --keep 7                  # private daemon-owned SQLite snapshot
 ```
 
 A native collector runs as a user service and writes coarse presence - focus changes,
@@ -79,11 +83,27 @@ Attribution derives from the focused workspace (Herdr's focused pane, then the
 window's process tree) and resolves client names only from explicit bindings —
 a confirmation line on stderr says what a session was attributed to.
 
+## Reporting and delivery
+
+Day and week share one attributed projection and Bend totals. Open sessions stay
+provisional, overlaps between clients stay ambiguous, and collection gaps remain
+visible. CLI/MCP exports page an immutable snapshot instead of exceeding the socket
+frame limit. [Report semantics](docs/reports.md) describe JSON/CSV/Markdown and
+[delivery recovery](docs/delivery.md) describes bounded spools, retry and refusals.
+[Backups](docs/backup.md) preserve a consistent ledger and prune only validated
+managed backup files, never evidence. The optional timer is packaged, not enabled.
+
+This batch is a local implementation, not approval to deploy or cut over. Still
+open: immutable-source replay across binding changes, audited history allocation
+corrections/undo, and attribution review in the popup. Binding confirmation changes
+future ingestion only. Live import, retiring the other writer and official hours
+remain separately approved.
+
 ## Harnesses
 
 ```sh
 workspan harness                        # every reader: store, freshness, staleness
-workspan ingest-harness --since-days 7  # import agent runtime from local histories
+workspan ingest-harness --since-days 7  # backfill further than the automatic window
 ```
 
 | Reader | Source |
@@ -97,14 +117,25 @@ Each reader is read-only, timing-only and replay-safe: running an import twice
 adds nothing. A store that is missing, stale or of an unknown shape is reported
 as unavailable rather than as zero activity.
 
+Detection is automatic. The daemon probes every reader when it starts and every
+five minutes after that, imports what it finds, and records each pass in
+`status.json` under `harness`: the store found, how stale it is, and how many
+records were accepted, duplicated or conflicted. `available: false` is a store
+that was not found - unavailable, never zero activity - and a reader that fails is
+named without hiding the others. `doctor` checks the pass is still running, and
+`workspan harness` prints the live probe next to the last automatic pass. The
+entry point takes `--harness-poll-ms` and `--harness-window-ms` for cadence and
+`--no-harness` to switch it off; the daemon library default is off, so a scratch
+daemon never reads live histories.
+
 ### Live adapters
 
 | Adapter | Surface | State |
 | --- | --- | --- |
 | Pi | in-process extension (`adapters/pi`) | installed in Pi's `packages`, shadow phase, delivering |
-| opencode | plugin (`adapters/opencode`) | installed in `opencode.json`; the shared app-server must be restarted before it loads |
+| opencode | plugin (`adapters/opencode`) | installed in `opencode.json`; observed delivering on 2026-10-04; plugin changes need an app-server restart |
 | Claude Code | hooks (`adapters/claude/hook.ts`) | installed for UserPromptSubmit / Stop / SubagentStop / SessionEnd |
-| Codex | none confirmed | 0.158's plugins package skills and an interface, not lifecycle hooks, and no hook or notify declaration is documented in its manifest - the history reader stays the Codex lane |
+| Codex | none confirmed | no supported live hook verified for the installed CLI; the inspected manifest is not proof of universal hook absence — history reader stays the lane |
 
 An adapter emits only `{ root, session, at, kind, origin }` through `src/client.ts`,
 and the daemon resolves attribution. None of them starts a session: attestation is the
@@ -113,7 +144,7 @@ person's, and a queued prompt is presence of unknown origin rather than attendan
 ## How it fits
 
 ```text
-Pi adapter --------+                                +--> day report / status.json
+Pi adapter --------+                                +--> day/week reports / status.json
 Codex history -----+                                |
 opencode history --+--> daemon (the only writer) ---+--> Omarchy bar widget
 Claude transcripts +       SQLite ledger           |
@@ -160,7 +191,8 @@ validated, and a changed shape is reported as unavailable.
 - [Architecture and acceptance](docs/architecture.md)
 - [Why the tracker misses hours](docs/missing-hours.md)
 - [Bend accounting core](docs/bend.md) and [provenance](docs/provenance.md)
-- [Desktop collector](docs/collector.md)
+- [Desktop collector](docs/collector.md) and [evidence recovery](docs/delivery.md)
+- [Day/week exports](docs/reports.md), [backups](docs/backup.md) and [cutover gates](docs/cutover.md)
 - [Dot and Codex feasibility research](docs/dot-time-tracking-research-2026-10-02.md)
 
 ## License

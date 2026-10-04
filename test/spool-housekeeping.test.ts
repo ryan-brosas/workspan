@@ -17,7 +17,7 @@ test("an empty spool is litter and is removed; undelivered evidence never is", (
     spool.dispose();
     expect(existsSync(spool.path)).toBe(false);
 
-    spool.append({ v: 1, source: "pi" });
+    spool.append({ v: 1, source: "pi", instance: "fixture", session: "s", event: "e", kind: "interaction", at: 1, origin: "human" });
     spool.dispose();
     expect(existsSync(spool.path)).toBe(true);
     expect(spool.lines().length).toBe(1);
@@ -40,7 +40,7 @@ test("the inventory uses the shared naming, and orphan spools are cleaned or kep
     expect(await drainOrphanedSpools({ directory: dir, socketPath: join(dir, "nothing.sock") })).toBe(0);
     expect(existsSync(join(dir, `claude-spool-${deadPid(1)}.jsonl`))).toBe(false);
     expect(existsSync(join(dir, `opencode-spool-${deadPid(2)}.jsonl`))).toBe(false);
-    expect(existsSync(join(dir, `pi-spool-${deadPid(3)}.jsonl`))).toBe(true);
+    expect(existsSync(join(dir, `pi-spool-${deadPid(3)}.jsonl.pending`))).toBe(true);
     expect(existsSync(join(dir, "notes.txt"))).toBe(true);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

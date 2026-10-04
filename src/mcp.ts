@@ -8,7 +8,7 @@
  * no tool writes a note that the person did not ask for.
  */
 import type { Method } from "./protocol.ts";
-import { WorkspanClient } from "./client.ts";
+import { WorkspanClient, readReport } from "./client.ts";
 
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
 export const SERVER_INFO = { name: "workspan", version: "0.1.0" } as const;
@@ -28,6 +28,11 @@ const TOOLS: Tool[] = [
     name: "work_day",
     description: "The day report as text: attested sessions with notes and pauses, the measures separately, seat-idle annotations, and the stretches no measure covers.",
     inputSchema: object({ date: { type: "string", description: "Local day as YYYY-MM-DD; omit for today" }, timezone: { type: "string", description: "IANA zone; omit for the daemon host's zone" } }),
+  },
+  {
+    name: "work_report",
+    description: "Read one immutable day or Monday-Sunday week report. Exact separate measures, provenance, provisional sessions and coverage; never a billing total.",
+    inputSchema: object({ period: { type: "string", enum: ["day", "week"] }, date: { type: "string" }, timezone: { type: "string" }, format: { type: "string", enum: ["text", "json", "csv", "md"] } }, ["period"]),
   },
   {
     name: "work_sessions",
@@ -86,6 +91,12 @@ export function createMcpServer(request: Requester): { handle(message: unknown):
         if (typeof args.timezone === "string") params.timezone = args.timezone;
         const report = (await request("day", params)) as { text?: string };
         return text(report.text ?? report);
+      }
+      case "work_report": {
+        if (args.period !== "day" && args.period !== "week") return toolError("work_report needs day or week");
+        const format = args.format ?? "json";
+        if (format !== "text" && format !== "json" && format !== "csv" && format !== "md") return toolError("invalid report format");
+        return text(await readReport({ period: args.period, format, ...(typeof args.date === "string" ? { date: args.date } : {}), ...(typeof args.timezone === "string" ? { timezone: args.timezone } : {}) }, request));
       }
       case "work_sessions": return text(await request("session.list"));
       case "work_projects": return text(await request("projects"));

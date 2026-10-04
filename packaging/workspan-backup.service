@@ -1,0 +1,21 @@
+# Optional client-only backup request; NOT installed or enabled by the repository.
+# Requires the daemon/CLI backup wiring. See docs/backup.md before enabling.
+[Unit]
+Description=Workspan consistent local backup
+Requires=workspan.service
+After=workspan.service
+
+[Service]
+Type=oneshot
+Environment=WORKSPAN_RUNTIME_DIR=%t/workspan
+Environment=WORKSPAN_BACKUP_KEEP=7
+ExecStart=%h/.local/bin/workspan backup --keep ${WORKSPAN_BACKUP_KEEP}
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+# No state/runtime directory ownership or database access: only the daemon writes.
