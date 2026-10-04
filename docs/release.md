@@ -33,6 +33,32 @@ A merge to `main` releases itself. Nobody chooses a number, and nobody tags by h
   (`patch`/`minor`/`major`/`prerelease`) or an exact `version`, which is how a
   pre-release is cut (`version: 0.2.0-rc.1`).
 
+## If a merge produced no run
+
+A push to `main` should start this workflow by itself. When a merge shows no run,
+check the two facts before changing anything:
+
+```sh
+gh run list --workflow release.yml --limit 3   # did any run appear?
+gh api repos/OWNER/REPO/events | head           # did GitHub receive the PushEvent?
+gh workflow list --all                          # are the workflows registered?
+```
+
+If the event arrived and the workflows are registered but no run was created, the
+same path can be dispatched: it derives, stamps, tags and publishes exactly as the
+automatic run does.
+
+```sh
+gh workflow run release.yml --ref main
+gh run watch "$(gh run list --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+```
+
+Observed once (2026-10-04, merge `251a87c`): the `PushEvent` was delivered and every
+workflow was active, yet neither this workflow nor `ci.yml` created a run; a dispatch
+succeeded immediately and published `v0.2.0`. `actionlint` on all three workflow files
+is clean, so the workflow itself was not the cause. Record what the checks above show
+before assuming either way.
+
 ## Verifying locally
 
 ```sh
