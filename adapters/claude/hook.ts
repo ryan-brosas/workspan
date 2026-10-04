@@ -58,6 +58,9 @@ export async function runHook(argv: string[] = process.argv.slice(2)): Promise<n
   if (!appended) return 0;
   // Delivery is best effort: a failure leaves the evidence spooled for the next hook.
   await Promise.race([spool.flush().catch(() => 0), new Promise(resolve => setTimeout(resolve, 1_500))]);
+  // A hook is one process: leaving an empty file behind would litter the spool
+  // directory once per invocation. Undelivered evidence is never removed.
+  spool.dispose();
   return 0;
 }
 

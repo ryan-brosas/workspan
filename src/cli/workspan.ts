@@ -36,6 +36,21 @@ const moment = (): { at?: number } => {
 /** One request through the shared client library, bound to this CLI's socket. */
 const request = (method: Method, params?: unknown): Promise<unknown> =>
   daemonRequest(method, params, { socketPath: socketFile });
+
+/**
+ * The roots that carry time and no client: the offer the desktop surface needs
+ * ("name this directory") instead of only a total. Every row names its measure,
+ * because the measures are never added together.
+ */
+async function printUnallocatedRoots(): Promise<void> {
+  const status = await request("status") as { measures: Record<string, { unallocated_roots?: Array<{ root: string; ms: number }> }> };
+  const rows = Object.entries(status.measures ?? {}).flatMap(([measure, value]) => (value.unallocated_roots ?? []).map(row => ({ measure, ...row })));
+  if (!rows.length) return;
+  console.log("unallocated, per measure (never added together):");
+  for (const row of rows.slice(0, 5)) {
+    console.log(`  ${row.measure.padEnd(8)} ${Math.round(row.ms / 60_000)}m  ${row.root}  -> workspan projects confirm ${row.root} <client>`);
+  }
+}
 /** The socket frame is capped at 64 KiB; a big import goes in batches that fit. */
 function batchEvents(events: readonly unknown[], maxBytes = 48_000): unknown[][] {
   const batches: unknown[][] = [];
@@ -77,6 +92,25 @@ async function main(): Promise<number> {
     return new Promise<number>(() => undefined);
   }
   if (group === "status") { console.log(JSON.stringify(await request("status"), null, 2)); return 0; }
+  // Confirming a derived label is a correction, not a new claim: the project name is
+  // carried over and only the explicit flag changes, so a guessed client becomes a
+  // named one without retyping it.
+  if (group === "projects" && action === "confirm") {
+    const root = positional[2];
+    if (!root) throw new Error("usage: workspan projects confirm <root> [project]");
+    let project = positional[3];
+    if (!project) {
+      const { bindings } = await request("projects") as { bindings: Array<{ root: string; project: string; explicit: boolean }> };
+      const existing = bindings.find(binding => binding.root === root);
+      if (!existing) throw new Error(`no binding for ${root}; name it: workspan projects confirm ${root} <project>`);
+      project = existing.project;
+    }
+    const { bindings } = await request("projects.bind", { root, project, explicit: true }) as { bindings: Array<{ root: string; project: string; explicit: boolean }> };
+    for (const binding of bindings.filter(row => row.root === root)) {
+      console.log(`explicit     ${binding.project.padEnd(28)} ${binding.root}`);
+    }
+    return 0;
+  }
   if (group === "projects" && action === "bind") {
     const root = positional[2];
     const project = positional[3];
@@ -94,6 +128,7 @@ async function main(): Promise<number> {
     const { bindings } = await request("projects") as { bindings: Array<{ root: string; project: string; explicit: boolean; source: string }> };
     for (const binding of bindings) console.log(`${binding.explicit ? "explicit " : "provisional"}  ${binding.project.padEnd(28)} ${binding.root}  (${binding.source})`);
     if (bindings.length === 0) console.log("no project bindings yet");
+    await printUnallocatedRoots();
     return 0;
   }
   if (group === "engine") {

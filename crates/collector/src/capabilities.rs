@@ -115,9 +115,11 @@ pub fn probe() -> CapabilityReport {
     let signals = vec![
         Signal { name: "focus".into(), available: compositor.command_channel.available, source: "hyprctl -j activewindow".into(), detail: "coarse class only; the application identifier is compared in memory and never emitted".into() },
         Signal { name: "idle-inhibit".into(), available: compositor.command_channel.available, source: "hyprctl -j activewindow inhibitingIdle".into(), detail: "reported as its own event, never as a break".into() },
-        Signal { name: "lock".into(), available: logind.available, source: "org.freedesktop.login1".into(), detail: logind.detail.clone() },
-        Signal { name: "suspend".into(), available: logind.available, source: "org.freedesktop.login1 PrepareForSleep".into(), detail: logind.detail.clone() },
-        Signal { name: "workspace".into(), available: event_socket_exists, source: ".socket2.sock".into(), detail: "event stream present; not wired to the emit path yet".into() },
+        // Availability means this collector emits the signal, not that the host could
+        // provide it: a declared-but-unsubscribed signal would read as "covered".
+        Signal { name: "lock".into(), available: false, source: "org.freedesktop.login1".into(), detail: format!("{}; not subscribed, so lock is not emitted - a locked seat looks like a quiet one", logind.detail) },
+        Signal { name: "suspend".into(), available: false, source: "org.freedesktop.login1 PrepareForSleep".into(), detail: format!("{}; not subscribed, so suspend is not emitted - a sleeping compositor appears as a sampling gap", logind.detail) },
+        Signal { name: "workspace".into(), available: false, source: ".socket2.sock".into(), detail: if event_socket_exists { "event stream present; not wired to the emit path yet".to_string() } else { "no event socket in this session".to_string() } },
         Signal { name: "wayland-idle".into(), available: idle_signal.0, source: "ext_idle_notifier_v1".into(), detail: idle_signal.1 },
     ];
 

@@ -5,14 +5,13 @@ Two ledgers exist during the shadow phase: `~/.local/state/pi-time-tracker/track
 `~/.local/state/workspan/workspan.sqlite`. **They are never added together**, and
 nothing here authorises the migration.
 
-## Where the comparison stands (2026-10-04)
+## Where the comparison stands (2026-10-04, adapters live)
 
 ```
 day         tracker work  ws inferred  ws attested  ws agent  inferred - tracker
-2026-10-04  375m          0m           0m           0m        -375m
+2026-10-04  398m          9m           0m           8m        -389m
 2026-10-03  561m          0m           0m           0m        -561m
 2026-10-02  328m          0m           0m           0m        -328m
-2026-10-01  905m          0m           0m           0m        -905m
 ```
 
 Reproduce with `bun scripts/reconcile-tracker.ts --days 7`. The tracker's `work`
@@ -22,9 +21,22 @@ read-only on both sides - the tracker's ledger is opened `readOnly: true`, and t
 Workspan numbers come from the daemon's own day report, because a client must not open
 the accounting database.
 
-The gap in the columns is expected, not a defect: Workspan holds no *historical*
-interaction evidence. Its live Pi adapter was installed on 2026-10-04 (3 events and
-~3.3 s of agent runtime that day), and the tracker's history has not been imported.
+The gap is expected and now shrinking: Workspan's inferred measure covers only what the
+live adapters have seen (the Pi extension, the opencode plugin and the Claude hook all
+started delivering on 2026-10-04), and the tracker's history has not been imported.
+
+### The import is planned, not run
+
+The rehearsal is a single read-only command:
+
+```sh
+bun run src/cli/workspan.ts migrate --chunks ~/.agents/exports/pi-worktime-chunks.jsonl \
+  --tracker-db ~/.local/state/pi-time-tracker/tracker.sqlite --target /tmp/ws-migrate-plan.sqlite
+```
+
+It answers with a plan and leaves nothing behind (`written: null`, `reconciliation:
+null`, no target file). `--apply` is the step that needs the approval, and step 3 above
+is what judges it.
 
 ## What must be true before the old writer is retired
 

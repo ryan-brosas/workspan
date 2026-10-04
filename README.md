@@ -72,7 +72,8 @@ review list for gaps you can attest afterwards.
 Harnesses integrate through one contract, not five: `docs/protocol.md` and
 `src/client.ts` own the transport, and the adapters only decide what an observation
 means. `workspan doctor` answers whether the daemon, the status file, the collector
-unit, its spool and every evidence source are actually wired, and `workspan mcp`
+unit, its spool, the ingest loop's heartbeat, the adapter spools and every evidence
+source are actually wired, and `workspan mcp`
 exposes the same daemon to an agent as read-mostly tools.
 Attribution derives from the focused workspace (Herdr's focused pane, then the
 window's process tree) and resolves client names only from explicit bindings —
@@ -103,7 +104,7 @@ as unavailable rather than as zero activity.
 | Pi | in-process extension (`adapters/pi`) | installed in Pi's `packages`, shadow phase, delivering |
 | opencode | plugin (`adapters/opencode`) | installed in `opencode.json`; the shared app-server must be restarted before it loads |
 | Claude Code | hooks (`adapters/claude/hook.ts`) | installed for UserPromptSubmit / Stop / SubagentStop / SessionEnd |
-| Codex | none confirmed | 0.158 ships a plugin/hook trust system whose declaration format is not documented locally, so the history reader stays the Codex lane |
+| Codex | none confirmed | 0.158's plugins package skills and an interface, not lifecycle hooks, and no hook or notify declaration is documented in its manifest - the history reader stays the Codex lane |
 
 An adapter emits only `{ root, session, at, kind, origin }` through `src/client.ts`,
 and the daemon resolves attribution. None of them starts a session: attestation is the

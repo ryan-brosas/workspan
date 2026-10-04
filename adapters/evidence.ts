@@ -7,7 +7,7 @@
  */
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { EvidenceSpool, spoolDirectory } from "../src/client.ts";
+import { EvidenceSpool, drainOrphanedSpools, spoolDirectory } from "../src/client.ts";
 import { EVIDENCE_VERSION } from "../src/daemon/evidence.ts";
 
 /** The event the daemon validates; its allowlist is the authority, not this type. */
@@ -59,4 +59,14 @@ export function spoolFor(name: string, socketPath?: string, notify?: (message: s
     ...(socketPath ? { socketPath } : {}),
     ...(notify ? { onFull: notify } : {}),
   });
+}
+
+/**
+ * Deliver what adapters that are gone left behind. Called once per adapter process
+ * at startup: an adapter that is the only one running still recovers the others'
+ * evidence, and the daemon's identity dedupe makes the replay safe.
+ */
+export async function drainAdapterSpools(socketPath?: string): Promise<number> {
+  try { return await drainOrphanedSpools({ ...(socketPath ? { socketPath } : {}) }); }
+  catch { return 0; }
 }

@@ -82,6 +82,8 @@ Recorded 2026-10-04, because a launch contract is only as good as the run it sur
 | Evidence reaching the ledger | `coverage.sources` gains `desktop`; no measure moves |
 | Spool | created 0600 in `%t/workspan`, cleared after an accepted batch, kept while the daemon is down |
 | New daemon methods | `workspan note --idle` answers `no_idle_stretch` with no stretch on record, which the old daemon could not say |
+| Ingest loop | writes a heartbeat every pass; a spool it cannot write exits non-zero so the unit restarts |
+| Runtime directory | `RuntimeDirectoryPreserve=yes` on the daemon: without it a daemon restart recreates `%t/workspan` and the collector's sandbox writes EROFS while looking healthy (observed 2026-10-04) |
 
 ## Milestone 1
 

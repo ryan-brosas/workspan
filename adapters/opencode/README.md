@@ -12,10 +12,11 @@ it owns.
 
 ## Install
 
-In `~/.config/opencode/opencode.json`:
+In `~/.config/opencode/opencode.json` (opencode V2 loads plugin directories; a
+direct file path is rejected):
 
 ```json
-"plugin": ["/mnt/ssd/work/project/workspan/adapters/opencode/index.ts"]
+"plugin": ["/mnt/ssd/work/project/workspan/adapters/opencode"]
 ```
 
 Installed on 2026-10-04. The plugin list is read when opencode's shared app-server

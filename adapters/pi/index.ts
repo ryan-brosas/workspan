@@ -106,6 +106,12 @@ export class WorkspanEmitter {
     // still spooled), but nothing is lost silently.
     await this.spool.flush();
   }
+
+  /** Flush, then remove the file if it is empty: an ended session leaves no litter. */
+  async dispose(): Promise<void> {
+    try { await this.spool.flush(); } catch { /* still spooled for the next process */ }
+    this.spool.dispose();
+  }
 }
 
 type SessionCtx = {
@@ -163,7 +169,7 @@ export default function workspanPiAdapter(pi: ExtensionAPI): void {
   // A switch can be vetoed, so state survives it; only drain what is already spooled.
   pi.on("session_before_switch", () => { void emitter.flush().catch(() => undefined); });
   pi.on("session_shutdown", (_event, ctx) => {
-    void emitter.flush().catch(() => undefined);
+    void emitter.dispose().catch(() => undefined);
     const session = sessionOf(ctx);
     if (session) roots.delete(session);
     if (live === session) live = null;

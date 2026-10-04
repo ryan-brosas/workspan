@@ -13,7 +13,7 @@ export type MeasureName = typeof MEASURES[number];
 export const NON_ADDITIVE_NOTE = "attested, inferred and agent runtime are separate measures and are never added together";
 
 export interface Segment { start: number; end: number }
-export interface Attributed { start: number; end: number; project?: string }
+export interface Attributed { start: number; end: number; project?: string; root?: string }
 
 export interface MeasureStatus {
   /** Union duration for the whole measure, produced by the Bend policy. */
@@ -22,6 +22,12 @@ export interface MeasureStatus {
   projects: Array<{ project: string; ms: number }>;
   /** Union time whose evidence carries no project. Never a guessed client. */
   unallocated_ms: number;
+  /**
+   * Where that unallocated time came from, per workspace root. It is what turns a
+   * bare total into an offer: name the directory and the time has a client. Roots
+   * are never guessed from an application name, and the parts are unions per root.
+   */
+  unallocated_roots: Array<{ root: string; ms: number }>;
   /** Union time claimed by more than one project. Requires review, never split. */
   ambiguous_ms: number;
 }
@@ -98,6 +104,21 @@ export function partitionByProject(intervals: readonly Attributed[]): { projects
   return { projects, unallocated, ambiguous, total: totalOf(sweep(intervals)) };
 }
 
+/** Union of the intervals that carry this root and no project. Never a raw sum. */
+function unallocatedByRoot(intervals: readonly Attributed[]): Array<{ root: string; ms: number }> {
+  const byRoot = new Map<string, Interval[]>();
+  for (const interval of intervals) {
+    if (!interval.root || interval.project || interval.end <= interval.start) continue;
+    const list = byRoot.get(interval.root);
+    if (list) list.push({ start: interval.start, end: interval.end });
+    else byRoot.set(interval.root, [{ start: interval.start, end: interval.end }]);
+  }
+  return [...byRoot.entries()]
+    .map(([root, list]) => ({ root, ms: totalOf(sweep(list)) }))
+    .filter(row => row.ms > 0)
+    .sort((a, b) => b.ms - a.ms || a.root.localeCompare(b.root));
+}
+
 function measure(intervals: readonly Attributed[]): MeasureStatus {
   const part = partitionByProject(intervals);
   const union = intervals.length === 0 ? 0 : reconcileIntervals([intervals.map(({ start, end }) => ({ start, end }))])[0];
@@ -107,6 +128,7 @@ function measure(intervals: readonly Attributed[]): MeasureStatus {
     // honest without listing names that carry no time.
     projects: [...part.projects.entries()].map(([project, ms]) => ({ project, ms })).filter(row => row.ms > 0).sort((a, b) => b.ms - a.ms || a.project.localeCompare(b.project)),
     unallocated_ms: part.unallocated,
+    unallocated_roots: unallocatedByRoot(intervals),
     ambiguous_ms: part.ambiguous,
   };
 }
@@ -149,14 +171,14 @@ export function agentIntervals(observations: readonly Observation[]): { interval
   const intervals: Attributed[] = [];
   // A turn is paired per source session: the completion is a separate event with
   // its own id, so identity is the session, not the start event.
-  const starts = new Map<string, { at: number; project?: string }>();
+  const starts = new Map<string, { at: number; project?: string; root?: string }>();
   for (const event of observations) {
     const key = [event.source, event.instance, event.session].join("\u0000");
-    if (event.kind === "agent-start") starts.set(key, { at: event.at, project: event.project });
+    if (event.kind === "agent-start") starts.set(key, { at: event.at, project: event.project, root: event.root });
     // An end without a start is not evidence of a duration, so it contributes nothing.
     if (event.kind === "agent-end") {
       const start = starts.get(key);
-      if (start) { intervals.push({ start: start.at, end: event.at, project: start.project ?? event.project }); starts.delete(key); }
+      if (start) { intervals.push({ start: start.at, end: event.at, project: start.project ?? event.project, root: start.root ?? event.root }); starts.delete(key); }
     }
   }
   return { intervals, open: starts.size };
@@ -198,6 +220,32 @@ export function idleStretches(observations: readonly Observation[]): IdleStretch
     } else if (open !== null) {
       // A resume before the stretch began is not evidence of a stretch: it closes
       // the open one and contributes nothing, rather than inventing an interval.
+      if (event.at > open) stretches.push({ from: open, to: event.at });
+      open = null;
+    }
+  }
+  if (open !== null) stretches.push({ from: open, to: null });
+  return stretches;
+}
+
+/**
+ * Idle-inhibitor stretches, from the collector's annotations only. `inhibit-idle` says
+ * the focused window asked the compositor to stay awake and `inhibit-cleared` says it
+ * stopped. It is the mirror image of `idleStretches` and just as far from a measure: a
+ * machine held awake proves something was running, never that a person was working, and
+ * an inhibitor with no clear is reported open rather than invented.
+ */
+export function inhibitStretches(observations: readonly Observation[]): IdleStretch[] {
+  const stretches: IdleStretch[] = [];
+  let open: number | null = null;
+  for (const event of observations) {
+    if (event.source !== "desktop" || event.kind !== "interaction") continue;
+    const token = /^(inhibit-idle|inhibit-cleared):(\d+)$/.exec(event.event);
+    if (!token) continue;
+    if (token[1] === "inhibit-idle") {
+      // Two holds with no clear between them are one stretch, not two.
+      open = open === null ? event.at : Math.min(open, event.at);
+    } else if (open !== null) {
       if (event.at > open) stretches.push({ from: open, to: event.at });
       open = null;
     }
@@ -354,7 +402,7 @@ function computeProjection(store: WorkspanStore, options: { idleGapMs: number })
       continue;
     }
     for (const span of activeSpans(row.startedAt, row.endedAt, rowTransitions)) {
-      attested.push({ start: span.start, end: span.end, project: row.project ?? undefined });
+      attested.push({ start: span.start, end: span.end, project: row.project ?? undefined, root: row.root ?? undefined });
     }
   }
 
@@ -364,7 +412,7 @@ function computeProjection(store: WorkspanStore, options: { idleGapMs: number })
   // against. A clock-written window sets both from the same value.
   const inferred: Attributed[] = windows
     .filter(w => w.kind === "work")
-    .map(w => ({ start: w.start, end: w.end, project: w.client === "" || w.client === "unallocated" ? undefined : w.client }));
+    .map(w => ({ start: w.start, end: w.end, project: w.client === "" || w.client === "unallocated" ? undefined : w.client, root: w.root || undefined }));
 
   // Agent runtime: paired turn evidence. A turn with no end stays open and visible.
   const { intervals: agent, open: openTurns } = agentIntervals(observations);

@@ -32,6 +32,11 @@ test("opencode: a run opens once and settles on idle, so runtime is one interval
   // Deleting a session closes its run instead of leaving it open forever.
   expect(tracker.settle({ type: "session.deleted", properties: { sessionID: "ses_2" } }, t0 + 80_000))
     .toMatchObject({ what: "deleted", kind: "agent-end" });
+  // V2 runs settle through the execution events as well as the legacy idle.
+  tracker.message("ses_3", t0 + 90_000);
+  expect(tracker.settle({ type: "session.execution.succeeded", properties: { sessionID: "ses_3" } }, t0 + 100_000))
+    .toMatchObject({ what: "idle", kind: "agent-end", session: "ses_3" });
+  expect(tracker.openRuns).toBe(0);
 });
 
 test("opencode: the session and directory are read from whichever shape the event uses", () => {

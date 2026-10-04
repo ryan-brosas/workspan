@@ -65,14 +65,17 @@ work windows overlap, and only the union is a defensible duration.
 All 13 imported bindings carry `explicit = 0`: the tracker derived those names from
 directory names, so Workspan reports them as **provisional** rather than presenting
 `tmp`, `utopia`, `repo` or `website` as clients someone chose. Confirming a binding
-is a correction — an explicit, reversible action — and is not implemented yet.
+is a correction — an explicit, reversible action — and it is now implemented:
+`workspan projects confirm <root>` keeps the derived label and marks it explicit, and
+the status payload lists unallocated time per root so the desktop surface can offer it.
 
 ## Still open
 
-- **No Pi adapter exists.** Workspan cannot capture Pi activity itself, so the
-  installed tracker must keep running until one does: uninstalling it first would
-  end Pi evidence rather than migrate it.
-- Confirming a provisional binding, and reallocating already-migrated history as a
-  recorded correction.
-- An unallocated breakdown by root in the status payload, so the desktop surface can
-  offer "bind this directory" instead of only a total.
+- **Reallocating already-migrated history.** A provisional label can now be confirmed
+  and an unallocated breakdown by root is in the status payload, but moving time that
+  was already imported under a provisional label is still a correction nobody can make.
+- **The Pi adapter is new.** It exists and is installed in shadow mode (`adapters/pi`),
+  so Pi evidence no longer depends on the tracker; the tracker still holds the history
+  that has not been imported.
+- **Retiring the old writer** waits on the shadow window and a reconciled import range
+  (see [cutover](cutover.md)).

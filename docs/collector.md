@@ -115,12 +115,35 @@ while the annotation is added to coverage — and the day report grows an
 Both the nudge and that section need the collector to be running *and* its lines
 ingested, which today is still the manual step below.
 
+## The ingest loop: health and failure
+
+`packaging/collector-ingest.sh` is the only thing between the collector's stdout and the
+daemon, and two of its properties are load-bearing:
+
+- **A heartbeat**, `collector.health` in the runtime directory, written every pass (15 s)
+  whether or not anything happened. The collector emits nothing while nothing changes, so
+  evidence freshness alone cannot tell a quiet seat from a broken lane: `workspan doctor`
+  reads the heartbeat and reports a stale one as `attention`.
+- **Fail loudly.** A spool that cannot be written exits non-zero so systemd restarts the
+  pipeline, instead of dropping line after line while the unit still looks healthy.
+
+The spool lives in the daemon's runtime directory (`%t/workspan`), which the collector
+unit's sandbox makes writable at *its* start. That is why `workspan.service` sets
+`RuntimeDirectoryPreserve=yes`: without it, every daemon restart recreates the directory,
+the collector's binding then resolves through the read-only root view, and its writes fail
+with EROFS - exactly the silent loss the heartbeat now catches.
+
 ## Not wired yet
 
 | Gap | Why it is not done |
 | --- | --- |
-| logind lock/suspend subscription | available on this host, but a D-Bus dependency or a `loginctl` reader has to be chosen deliberately |
-| `.socket2.sock` event stream | its `activewindow>>` payload carries the window title, so it needs the same transient-read decision as anything else content-bearing |
+| logind lock/suspend subscription | not wired: the capability report says `available: false` for both, because a declared-but-unsubscribed signal would read as covered. A suspended compositor already appears as a `sampling-gap` annotation |
+| `.socket2.sock` event stream | its `activewindow>>` payload carries the window title, so it needs the same transient-read decision as anything else content-bearing; the capability report says `available: false` |
 | application identity in events | needs a bounded `app` field in the evidence envelope first |
-| daemon transport, spooling | today the collector writes stdout and the CLI ingests; a direct socket client is a separate decision |
+| collector-side socket client | today the collector writes stdout and the packaging shim spools and ingests it; moving the transport inside the collector is a separate decision |
 | idle as a break | never automatic: seat idle annotates (the popup nudge and the day report's `Away` section) and marks review boundaries; automatic pause is opt-in under an explicit policy |
+
+The day report also shows what the annotations say: `Held awake (idle inhibit annotations,
+never subtracted)` for the stretches where the machine was told not to idle, and
+`Collection (desktop lane health)` for the day's `sampling-gap`, `source-unavailable` and
+`idle-unavailable` events. Both are reviews of the lane, not additions to a measure.

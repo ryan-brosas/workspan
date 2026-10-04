@@ -10,7 +10,7 @@
  */
 import { localDayKey } from "../core/ledger.ts";
 import { reconcileIntervals } from "../core/native.ts";
-import { activeSpans, agentIntervals, idleStretches, observedSpan, partitionByProject, uncoveredStretches } from "../daemon/measures.ts";
+import { activeSpans, agentIntervals, idleStretches, inhibitStretches, observedSpan, partitionByProject, uncoveredStretches } from "../daemon/measures.ts";
 import type { WorkspanStore, Observation, SessionRow, SessionNote } from "../daemon/db.ts";
 
 export interface DayOptions { date?: string; timezone?: string; now?: number }
@@ -157,6 +157,36 @@ export function renderDay(store: WorkspanStore, options: DayOptions = {}): DayRe
     const heldText = held < 60_000 ? "<1m" : duration(held);
     // A missing resume is not an end: say so instead of inventing the return.
     lines.push(`  ${when}   ${heldText}${stretch.open ? " (no resume recorded)" : ""}`);
+  }
+
+  // An idle inhibitor is the opposite annotation to "away": the machine was told not
+  // to go idle, so a stretch that looks quiet may still be attended. Listed for review
+  // and subtracted from nothing, like every seat annotation.
+  const held = inhibitStretches(observations)
+    .map(stretch => ({ start: stretch.from, end: stretch.to ?? now, open: stretch.to === null }))
+    .map(stretch => ({ ...stretch, start: Math.max(stretch.start, bounds.start), end: Math.min(stretch.end, bounds.end) }))
+    .filter(stretch => stretch.end > stretch.start);
+  lines.push("", "Held awake (idle inhibit annotations, never subtracted)", "");
+  if (!held.length) lines.push("  none");
+  for (const stretch of held) {
+    const when = `${clock(stretch.start, timezone)}-${stretch.open ? "open" : clock(stretch.end, timezone)}`;
+    const length = stretch.end - stretch.start;
+    lines.push(`  ${when}   ${length < 60_000 ? "<1m" : duration(length)}${stretch.open ? " (no clear recorded)" : ""}`);
+  }
+
+  // The collector's own health, from the day's evidence. A lane that could not sample
+  // is reported here rather than smoothed into a quiet day, and it moves no measure.
+  const collection = observations.filter(event => event.source === "desktop" && event.at >= bounds.start && event.at < bounds.end && /^(sampling-gap|source-unavailable|idle-unavailable):/.test(event.event));
+  lines.push("", "Collection (desktop lane health)", "");
+  if (!collection.length) lines.push("  none");
+  else {
+    const counts = new Map<string, number>();
+    for (const event of collection) {
+      const token = event.event.slice(0, event.event.indexOf(":"));
+      counts.set(token, (counts.get(token) ?? 0) + 1);
+    }
+    const last = clock(Math.max(...collection.map(event => event.at)), timezone);
+    lines.push(`  ${[...counts.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([token, count]) => `${count} ${token}`).join(", ")} (last ${last})`);
   }
 
   const conflicts = store.conflictRows().length;

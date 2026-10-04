@@ -35,6 +35,12 @@ StateDirectory=workspan
 StateDirectoryMode=0700
 RuntimeDirectory=workspan
 RuntimeDirectoryMode=0700
+# The directory must survive a restart. systemd recreates a RuntimeDirectory when
+# the unit starts, and a sandboxed client that bound %t/workspan at its own start
+# (the collector) then resolves that path through the read-only root view: writes
+# fail with EROFS and its evidence is dropped while nothing looks wrong. This keeps
+# one inode for the socket, the status file, the heartbeat and that binding.
+RuntimeDirectoryPreserve=yes
 
 # ---------------------------------------------------------------------------
 # Sandboxing. The daemon serves one Unix socket and writes its own state; it has
@@ -56,9 +62,9 @@ SystemCallFilter=@system-service
 # MemoryDenyWriteExecute is deliberately NOT set: the daemon runs on a V8/Node
 # runtime whose JIT needs writable-executable pages.
 #
-# First-install check (not yet run): confirm the daemon can still write
-# %S/workspan while ProtectHome=read-only is active, and that the plugin sees
-# status.json disappear when the service stops (RuntimeDirectory is cleaned up).
+# Verified on this host (2026-10-04): the daemon writes %S/workspan with
+# ProtectHome=read-only active. RuntimeDirectoryPreserve keeps the runtime inode
+# alive across restarts, which is what the collector's sandbox binding depends on.
 
 [Install]
 WantedBy=graphical-session.target

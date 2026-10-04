@@ -1,6 +1,7 @@
 # Workspan architecture
 
-Status: proposed, not implemented or approved for deployment. Research date: 2026-10-02 UTC.
+Status: implemented and deployed on this host (2026-10-04); this document remains the
+architecture of record. Research date: 2026-10-02 UTC.
 
 Audience: the next engineer implementing Workspan. [Research and Sourcebot receipts](research-2026-10-02.md) contain pinned evidence, licenses and verification limits. [Dot research](dot-time-tracking-research-2026-10-02.md) owns the cloud-client investigation.
 

@@ -5,15 +5,18 @@
  * is the only process that does that.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { WorkspanClient } from "../client.ts";
+import { WorkspanClient, listSpools, spoolDirectory } from "../client.ts";
 import { defaultDatabasePath, defaultRuntimeDir, socketPath, statusPath } from "../daemon/paths.ts";
 import type { Status } from "../daemon/measures.ts";
 
 export interface Check { name: string; state: "ok" | "attention" | "unknown"; detail: string }
 export interface DoctorReport { verdict: "ok" | "attention"; checks: Check[] }
-export interface DoctorOptions { socketPath?: string; runtimeDir?: string; databasePath?: string; now?: number }
+export interface DoctorOptions { socketPath?: string; runtimeDir?: string; databasePath?: string; spoolDir?: string; now?: number }
+
+/** Three missed passes of the ingest loop's 15s timer mean the lane stopped writing. */
+const HEARTBEAT_STALE_MS = 45_000;
 
 const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
@@ -58,6 +61,32 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
     checks.push(collector.state === "ok"
       ? { name: "collector spool", state: "ok", detail: "no spool file yet: nothing pending" }
       : { name: "collector spool", state: "unknown", detail: "no spool file: the collector has not run in this session" });
+  }
+
+  // The ingest loop's heartbeat. The collector emits nothing while nothing changes,
+  // so a quiet seat and a broken pipeline look identical in the evidence: this is
+  // the only signal that tells them apart, and it is what a stale lane was hiding.
+  const healthFile = join(runtimeDir, "collector.health");
+  try {
+    const beat = Number(readFileSync(healthFile, "utf8").trim());
+    const age = now - beat;
+    checks.push(Number.isFinite(beat) && age < HEARTBEAT_STALE_MS
+      ? { name: "collector heartbeat", state: "ok", detail: `written ${Math.round(age / 1000)}s ago` }
+      : { name: "collector heartbeat", state: "attention", detail: `${healthFile} last written ${Number.isFinite(beat) ? `${Math.round(age / 1000)}s ago` : "unreadably"}; the ingest loop is not running` });
+  } catch {
+    checks.push({ name: "collector heartbeat", state: "unknown", detail: "no heartbeat yet: the ingest loop has not run in this session" });
+  }
+
+  // Adapter spools are evidence in transit: an empty file is litter a producer left
+  // behind, a non-empty one is something that has not reached the daemon.
+  const spools = listSpools({ directory: options.spoolDir ?? spoolDirectory() });
+  const pending = spools.filter(file => file.bytes > 0);
+  if (!pending.length) {
+    checks.push({ name: "adapter spools", state: "ok", detail: spools.length === 0 ? "none" : `${spools.length} empty file(s) left by producers` });
+  } else {
+    const bytes = pending.reduce((sum, file) => sum + file.bytes, 0);
+    const oldest = Math.min(...pending.map(file => { try { return statSync(file.path).mtimeMs; } catch { return now; } }));
+    checks.push({ name: "adapter spools", state: "attention", detail: `${pending.length} file(s), ${bytes} bytes pending, oldest ${Math.round((now - oldest) / 1000)}s: evidence has not reached the daemon` });
   }
 
   const sources = status?.coverage?.sources ?? [];

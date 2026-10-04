@@ -115,30 +115,63 @@ export class EvidenceSpool {
     return lines.length;
   }
   lines(): string[] { try { return readFileSync(this.path, "utf8").split("\n").filter(Boolean); } catch { return []; } }
+  /**
+   * Remove the file when nothing is pending. An empty spool is litter, not evidence:
+   * every adapter process that had nothing to send used to leave one behind forever.
+   * A file that still holds undelivered evidence is never touched.
+   */
+  dispose(): void { if (this.pendingBytes === 0) rmSync(this.path, { force: true }); }
+}
+
+/** One spool file on disk, with the process that owns it. */
+export interface SpoolFile { name: string; path: string; bytes: number; pid: number; alive: boolean }
+
+/** `<adapter>-spool-<pid>.jsonl`: the naming every adapter shares. */
+const SPOOL_NAME = /^[a-z0-9]+-spool-(\d+)\.jsonl$/;
+
+function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
+}
+
+/**
+ * Every spool file a producer may have left, for the drain and for the health report.
+ * With no prefix the shared naming is matched, so a new adapter is covered without
+ * registering anywhere; a prefix keeps the older exact-match call sites working.
+ */
+export function listSpools(options: { directory?: string; prefix?: string } = {}): SpoolFile[] {
+  const directory = options.directory ?? spoolDirectory();
+  let names: string[];
+  try { names = readdirSync(directory); } catch { return []; }
+  const found: SpoolFile[] = [];
+  for (const name of names) {
+    const digits = options.prefix
+      ? (name.startsWith(options.prefix) && name.endsWith(".jsonl") ? name.slice(options.prefix.length).replace(/\.jsonl$/, "") : null)
+      : SPOOL_NAME.exec(name)?.[1] ?? null;
+    const pid = Number(digits);
+    if (digits === null || !Number.isSafeInteger(pid)) continue;
+    const path = join(directory, name);
+    let bytes = 0;
+    try { bytes = statSync(path).size; } catch { continue; }
+    found.push({ name, path, bytes, pid, alive: pid === process.pid || processAlive(pid) });
+  }
+  return found.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /**
  * Drain spools left by processes that are gone: a crashed adapter's evidence still
- * counts, and the daemon's identity dedupe makes delivery safe to retry.
+ * counts, and the daemon's identity dedupe makes delivery safe to retry. An empty
+ * orphan is removed instead of opened.
  */
-export async function drainOrphanedSpools(options: { socketPath?: string; directory?: string; prefix: string }): Promise<number> {
-  const directory = options.directory ?? spoolDirectory();
-  let names: string[] = [];
-  try { names = readdirSync(directory).filter(name => name.startsWith(options.prefix) && name.endsWith(".jsonl")); }
-  catch { return 0; }
+export async function drainOrphanedSpools(options: { socketPath?: string; directory?: string; prefix?: string } = {}): Promise<number> {
   let delivered = 0;
-  for (const name of names) {
-    const pid = Number(name.slice(options.prefix.length).replace(/\.jsonl$/, ""));
-    if (!Number.isSafeInteger(pid) || pid === process.pid) continue;
-    let alive = true;
-    try { process.kill(pid, 0); }
-    catch (error) { alive = (error as NodeJS.ErrnoException).code !== "ESRCH"; }
-    if (alive) continue;
-    const spoolPath = join(directory, name);
-    const spool = new EvidenceSpool({ spoolPath, socketPath: options.socketPath });
+  for (const file of listSpools(options)) {
+    if (file.pid === process.pid || file.alive) continue;
+    if (file.bytes === 0) { rmSync(file.path, { force: true }); continue; }
+    const spool = new EvidenceSpool({ spoolPath: file.path, socketPath: options.socketPath });
     try {
       delivered += await spool.flush();
-      if (spool.pendingBytes === 0) rmSync(spoolPath, { force: true });
+      if (spool.pendingBytes === 0) rmSync(file.path, { force: true });
     } catch { /* undeliverable now: leave it for the next session to try */ }
   }
   return delivered;
