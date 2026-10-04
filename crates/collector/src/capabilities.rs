@@ -9,6 +9,8 @@ use std::env;
 use std::path::Path;
 use std::process::Command;
 
+use crate::idle;
+
 #[derive(Serialize)]
 pub struct CapabilityReport {
     pub compositor: Compositor,
@@ -92,6 +94,10 @@ pub fn probe() -> CapabilityReport {
     let version = hyprctl_version();
     let logind = system_service_present("org.freedesktop.login1");
 
+    // The idle answer is a bind attempt, not a support table: the protocol is only
+    // visible to a client, so this is the only honest way to answer it.
+    let idle_signal = idle::probe();
+
     let compositor = Compositor {
         name: if instance_signature().is_some() { "Hyprland".to_string() } else { "unknown".to_string() },
         instance: instance_signature(),
@@ -112,13 +118,14 @@ pub fn probe() -> CapabilityReport {
         Signal { name: "lock".into(), available: logind.available, source: "org.freedesktop.login1".into(), detail: logind.detail.clone() },
         Signal { name: "suspend".into(), available: logind.available, source: "org.freedesktop.login1 PrepareForSleep".into(), detail: logind.detail.clone() },
         Signal { name: "workspace".into(), available: event_socket_exists, source: ".socket2.sock".into(), detail: "event stream present; not wired to the emit path yet".into() },
-        Signal { name: "wayland-idle".into(), available: false, source: "ext_idle_notifier_v1".into(), detail: "no Wayland client in this build, so availability is unknown here; lock and suspend come from logind instead".into() },
+        Signal { name: "wayland-idle".into(), available: idle_signal.0, source: "ext_idle_notifier_v1".into(), detail: idle_signal.1 },
     ];
 
     let notes = vec![
         "Presence and idle are annotations: they never become working hours and never prove attendance.".to_string(),
         "Capability absence is reported as unavailable, not as zero activity.".to_string(),
         "Window titles, descriptions and tags are not read; application identity in an event needs a bounded envelope field and is not implemented.".to_string(),
+        "The idle subscription observes the seat, not the application that had focus: it can say \"no input\", never \"not working\".".to_string(),
     ];
 
     CapabilityReport { compositor, signals, notes }

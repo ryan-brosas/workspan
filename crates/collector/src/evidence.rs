@@ -28,12 +28,26 @@ pub fn now_ms() -> i64 {
 /// inhibit-idle, sampling-gap, source-unavailable, ...); application identity is never
 /// part of it.
 pub fn presence_event(instance: &str, what: &str, at_ms: i64) -> EvidenceEvent {
+    observation(instance, format!("{what}:{at_ms}"), at_ms)
+}
+
+/// One seat idle transition, as `ext_idle_notifier_v1` reported it.
+///
+/// The notifier fires only after `timeout_ms` without input, so the timeout travels
+/// in the event id: it is what turns the stamp back into the start of the quiet
+/// stretch (`at - timeout_ms`) without a config lookup, and a reader that did not
+/// know it would understate the gap.
+pub fn idle_event(instance: &str, transition: &str, at_ms: i64, timeout_ms: u32) -> EvidenceEvent {
+    observation(instance, format!("{transition}:{at_ms}:{timeout_ms}"), at_ms)
+}
+
+fn observation(instance: &str, event: String, at_ms: i64) -> EvidenceEvent {
     EvidenceEvent {
         v: 1,
         source: SOURCE.to_string(),
         instance: instance.to_string(),
         session: instance.to_string(),
-        event: format!("{what}:{at_ms}"),
+        event,
         kind: "interaction".to_string(),
         at: at_ms,
         origin: ORIGIN.to_string(),
@@ -66,5 +80,18 @@ mod tests {
     fn the_event_id_names_the_transition_and_the_moment_only() {
         let event = presence_event("host-desktop", "inhibit-idle", 42);
         assert_eq!(event.event, "inhibit-idle:42");
+    }
+
+    #[test]
+    fn an_idle_event_carries_the_timeout_that_places_the_quiet_stretch() {
+        let event = idle_event("host-desktop", "idle", 1_700_000_000_000, 300_000);
+        assert_eq!(event.event, "idle:1700000000000:300000");
+        assert_eq!(event.at, 1_700_000_000_000);
+        // Still an annotation: unknown origin, and no project to guess at.
+        let value: serde_json::Value = serde_json::from_str(&to_json(&event)).expect("json");
+        assert_eq!(value["origin"], "unknown");
+        assert_eq!(value["kind"], "interaction");
+        assert!(value.get("project").is_none());
+        assert_eq!(idle_event("host-desktop", "resumed", 7, 300_000).event, "resumed:7:300000");
     }
 }

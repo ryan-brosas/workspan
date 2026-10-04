@@ -16,7 +16,7 @@ $XDG_RUNTIME_DIR/workspan/workspan.sock       the daemon socket, used by the CLI
 | --- | --- |
 | Bar | The strongest *attended* evidence (attested if any, else inferred) as `1:05`; dimmed with a dot when the daemon has stopped writing, plus an optional glyph |
 | Tooltip | All three measures side by side, and the sentence that they are never added together |
-| Popup | Session controls (Start, Pause/Resume, Stop, Refresh), the session line with state and provisional time, each measure against the projects it is allocated to, unallocated and ambiguous evidence, coverage warnings |
+| Popup | Session controls (Start, Pause/Resume, Stop, Refresh), the session line with state and provisional time, each measure against the projects it is allocated to, unallocated and ambiguous evidence, coverage warnings, and the seat-idle nudge |
 
 For a single key or menu row, `workspan session toggle` starts when nothing is open and stops what is open.
 
@@ -33,6 +33,11 @@ time worked, so it is shown in the popup with its own label.
 - A Dot nudge: when the ChatGPT app's Dot profile was active in the last 15
   minutes and nothing is being tracked, the popup says so with a caption. It is
   presence, not attendance - it starts nothing, names no client and stores nothing.
+- An idle nudge: when the collector reports a *finished* stretch with no seat input,
+  the popup says for how long, for 15 minutes after the seat woke. A stretch with no
+  resume is not asserted - a stopped collector looks the same as a quiet desk - and
+  the day report labels it `no resume recorded`. It pauses nothing and subtracts
+  nothing: whether that stretch was a break is the person's call.
 
 ## Deliberate choices
 

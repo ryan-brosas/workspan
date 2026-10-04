@@ -6,7 +6,7 @@ import vm from "node:vm"
 // explicit export list so the same source is testable without QML.
 const source = fs.readFileSync(new URL("../Workspan.js", import.meta.url), "utf8")
   .replace(/^\.pragma library\s*/, "")
-  + "\nmodule.exports = { NON_ADDITIVE, expandPath, parseStatus, measure, formatDuration, formatClock, verticalClock, barLabel, barLabelVertical, ageSeconds, staleness, isOffline, displayRows, measureCaveats, companyRows, dotHint, warnings, sessionLine, tooltip, shortMessage, engineLine }\n"
+  + "\nmodule.exports = { NON_ADDITIVE, expandPath, parseStatus, measure, formatDuration, formatClock, verticalClock, barLabel, barLabelVertical, ageSeconds, staleness, isOffline, displayRows, measureCaveats, companyRows, dotHint, idleHint, warnings, sessionLine, tooltip, shortMessage, engineLine }\n"
 const sandbox = { module: { exports: {} }, isFinite, Number, Math, JSON, String, Array, Object }
 vm.runInNewContext(source, sandbox, { filename: "Workspan.js" })
 const W = sandbox.module.exports
@@ -83,6 +83,18 @@ assert.equal(W.dotHint({ available: true, last_activity_at: NOW - 20 * 60_000 },
 assert.equal(W.dotHint({ available: false, last_activity_at: NOW - 60_000 }, status, NOW), "")
 assert.equal(W.dotHint({ available: true }, status, NOW), "")
 assert.equal(W.dotHint(null, status, NOW), "")
+// The return-from-idle nudge: annotation only. It shows while the seat is quiet or
+// shortly after, and it never claims anything was adjusted.
+const idleStatus = { ...status, last_idle: { from: NOW - 30 * 60_000, to: NOW - 6 * 60_000, idle_ms: 24 * 60_000, still_away: false } }
+assert.equal(W.idleHint(idleStatus, NOW), "No input for 24m \u2014 nothing was paused automatically")
+// An open stretch is not asserted: "away" and "the collector stopped" look identical.
+assert.equal(W.idleHint({ ...status, last_idle: { from: NOW - 30 * 60_000, to: null, idle_ms: 30 * 60_000, still_away: true } }, NOW), "")
+assert.equal(W.idleHint({ ...idleStatus, last_idle: { ...idleStatus.last_idle, to: NOW - 40 * 60_000 } }, NOW), "")
+assert.equal(W.idleHint({ ...status, last_idle: { from: NOW - 30 * 60_000, to: NOW - 30 * 60_000 + 3_000, idle_ms: 3_000, still_away: false } }, NOW), "")
+assert.equal(W.idleHint({ ...status, last_idle: { from: NOW, to: NOW - 60_000 } }, NOW), "")
+assert.equal(W.idleHint(status, NOW), "")
+assert.equal(W.idleHint(null, NOW), "")
+
 assert.match(W.tooltip(running, NOW, 30), /coral - 1h 05m provisional \(running\)/)
 assert.match(W.tooltip(pausedOpen, NOW, 30), /coral - 2m provisional \(paused\)/)
 

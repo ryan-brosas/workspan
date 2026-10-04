@@ -48,6 +48,8 @@ Panel {
   readonly property var warnings: Workspan.warnings(snapshot)
   /** The caption line, empty when there is nothing to nudge about. */
   readonly property string dotHint: Workspan.dotHint(root.dotPresence, root.snapshot, root.nowMs)
+  /** The seat-idle nudge: an annotation that pauses nothing, so it only reports. */
+  readonly property string idleHint: Workspan.idleHint(root.snapshot, root.nowMs)
   readonly property string barText: root.vertical ? Workspan.barLabelVertical(root.snapshot) : Workspan.barLabel(root.snapshot)
   /** One entry per stacked line, the way the stock clock splits its vertical format. */
   readonly property var verticalLines: root.vertical ? root.barText.split("\n") : []
@@ -271,6 +273,18 @@ Panel {
             detail: root.online ? "" : "The daemon is not writing status. Start it with: workspan daemon"
             foreground: root.foreground
             fontFamily: root.fontFamily
+          }
+
+          // The return-from-idle nudge: what the seat saw while nobody typed. It
+          // reports; pausing or correcting the session stays the person's decision.
+          Text {
+            width: parent.width
+            text: root.idleHint
+            visible: root.idleHint !== ""
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
           }
 
           // The company picker: what the menu row does, one click away in the

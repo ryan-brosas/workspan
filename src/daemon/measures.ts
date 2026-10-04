@@ -120,6 +120,11 @@ export interface Status {
   measures: Record<MeasureName, MeasureStatus>;
   /** `id` is the internal key; `session` is what session.stop takes back. */
   current_session: { id: string; session: string; project: string | null; root: string | null; started_at: number; state: "running" | "paused"; paused_ms: number; paused_at: number | null; provisional_ms: number } | null;
+  /**
+   * The latest seat idle stretch: an annotation from the collector, never a measure.
+   * `idle_ms` is live while the stretch is open; nothing is paused or subtracted by it.
+   */
+  last_idle: { from: number; to: number | null; idle_ms: number; still_away: boolean } | null;
   coverage: {
     events: number;
     conflicts: number;
@@ -152,6 +157,50 @@ export function agentIntervals(observations: readonly Observation[]): { interval
   return { intervals, open: starts.size };
 }
 
+/** The collector refuses to arm a notification beyond a day; a token that claims more is not one to interpret. */
+const MAX_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+
+export interface IdleStretch {
+  /** Start of the quiet stretch: the notification stamp minus the timeout it waited out. */
+  from: number;
+  /** First input afterwards; `null` while the seat is still quiet. */
+  to: number | null;
+}
+
+/**
+ * Seat idle stretches, from the collector's annotations only. The collector writes
+ * `idle:<at>:<timeout>` and `resumed:<at>:<timeout>`, so the quiet stretch began at
+ * `at - timeout`: that subtraction is what makes the start provable rather than
+ * guessed, since the protocol guarantees the timeout elapsed before it fired.
+ *
+ * A stretch never reaches a measure. No seat input is not the same as no work -
+ * reading, a call or a meeting all look quiet - so this is a review item, and only
+ * the person's own session evidence says what it was.
+ */
+export function idleStretches(observations: readonly Observation[]): IdleStretch[] {
+  const stretches: IdleStretch[] = [];
+  let open: number | null = null;
+  for (const event of observations) {
+    if (event.source !== "desktop" || event.kind !== "interaction") continue;
+    const token = /^(idle|resumed):(\d+):(\d+)$/.exec(event.event);
+    if (!token) continue;
+    const timeout = Number(token[3]);
+    if (!Number.isSafeInteger(timeout) || timeout <= 0 || timeout > MAX_IDLE_TIMEOUT_MS) continue;
+    if (token[1] === "idle") {
+      const from = Math.max(0, event.at - timeout);
+      // Two notifications with no resume between them are one quiet stretch, not two.
+      open = open === null ? from : Math.min(open, from);
+    } else if (open !== null) {
+      // A resume before the stretch began is not evidence of a stretch: it closes
+      // the open one and contributes nothing, rather than inventing an interval.
+      if (event.at > open) stretches.push({ from: open, to: event.at });
+      open = null;
+    }
+  }
+  if (open !== null) stretches.push({ from: open, to: null });
+  return stretches;
+}
+
 /**
  * The expensive half of a status: everything derived from the evidence and the
  * policy, and nothing derived from the clock. Recomputing it costs a Bend union
@@ -164,6 +213,8 @@ interface Projection {
   coverage: Status["coverage"];
   /** Cached without the provisional duration, which is a function of the current time. */
   session: { id: string; session: string; project: string | null; root: string | null; started_at: number; state: "running" | "paused"; paused_ms: number; paused_at: number | null } | null;
+  /** The latest stretch only: closed duration is evidence, an open one is drawn live. */
+  lastIdle: IdleStretch | null;
   observations: number;
   conflicts: number;
 }
@@ -259,10 +310,14 @@ function computeProjection(store: WorkspanStore, options: { idleGapMs: number })
   // Agent runtime: paired turn evidence. A turn with no end stays open and visible.
   const { intervals: agent, open: openTurns } = agentIntervals(observations);
 
+  // Seat idle annotations. They are projected for review, never into a measure.
+  const seatIdle = idleStretches(observations);
+
   return {
     measures: { attested: measure(attested), inferred: measure(inferred), agent: measure(agent) },
     coverage: { events: observations.length, conflicts: conflicts.length, open_agent_turns: openTurns, open_sessions: openSessions, sources: store.sources() },
     session: current,
+    lastIdle: seatIdle.length ? seatIdle[seatIdle.length - 1] : null,
     observations: observations.length,
     conflicts: conflicts.length,
   };
@@ -293,6 +348,14 @@ export function buildStatus(store: WorkspanStore, options: { idleGapMs: number; 
       }
       : null,
     coverage: projection.coverage,
+    // The cached half is the stretch itself; the duration of an open one is the
+    // only field that moves with the clock, so it is computed here and not cached.
+    last_idle: projection.lastIdle === null ? null : {
+      from: projection.lastIdle.from,
+      to: projection.lastIdle.to,
+      idle_ms: Math.max(0, (projection.lastIdle.to ?? now) - projection.lastIdle.from),
+      still_away: projection.lastIdle.to === null,
+    },
     watermark: { observations: projection.observations, conflicts: projection.conflicts },
     non_additive: NON_ADDITIVE_NOTE,
   };

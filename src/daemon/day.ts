@@ -10,7 +10,7 @@
  */
 import { localDayKey } from "../core/ledger.ts";
 import { reconcileIntervals } from "../core/native.ts";
-import { agentIntervals, activeSpans, partitionByProject } from "../daemon/measures.ts";
+import { activeSpans, agentIntervals, idleStretches, partitionByProject } from "../daemon/measures.ts";
 import type { WorkspanStore, SessionRow, SessionNote } from "../daemon/db.ts";
 
 export interface DayOptions { date?: string; timezone?: string; now?: number }
@@ -113,6 +113,23 @@ export function renderDay(store: WorkspanStore, options: DayOptions = {}): DayRe
     if (part.unallocated > 0) parts.push(`unallocated ${duration(part.unallocated)}`);
     if (part.ambiguous > 0) parts.push(`ambiguous ${duration(part.ambiguous)}`);
     lines.push(`  ${label}: ${duration(union)}${parts.length ? ` (${parts.join(", ")})` : ""}`);
+  }
+
+  // Seat idle is an annotation, not a measure: it is listed for review and never
+  // subtracted, because "no seat input" is not the same as "not working".
+  const away = idleStretches(observations)
+    .map(stretch => ({ start: stretch.from, end: stretch.to ?? now, open: stretch.to === null }))
+    .map(stretch => ({ ...stretch, start: Math.max(stretch.start, bounds.start), end: Math.min(stretch.end, bounds.end) }))
+    .filter(stretch => stretch.end > stretch.start);
+  lines.push("", "Away (seat idle annotations, never subtracted)", "");
+  if (!away.length) lines.push("  none");
+  for (const stretch of away) {
+    const when = `${clock(stretch.start, timezone)}-${stretch.open ? "open" : clock(stretch.end, timezone)}`;
+    // A short stretch is real but not a minute long; "0m" would read as nothing.
+    const held = stretch.end - stretch.start;
+    const heldText = held < 60_000 ? "<1m" : duration(held);
+    // A missing resume is not an end: say so instead of inventing the return.
+    lines.push(`  ${when}   ${heldText}${stretch.open ? " (no resume recorded)" : ""}`);
   }
 
   const conflicts = store.conflictRows().length;

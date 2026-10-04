@@ -6,11 +6,17 @@ license = "MIT"
 publish = false
 description = "Native desktop capability probe and coarse presence collector for Workspan."
 
-# Kept deliberately small: a collector that reads one compositor's metadata should not
-# pull a runtime of its own.
+# Kept deliberately small. `serde`/`serde_json` carry the evidence envelope; the
+# Wayland client is what lets the probe answer `ext_idle_notifier_v1` at all, since
+# without a client the registry is invisible. It is pure Rust and resolves
+# libwayland at runtime, so the binary still has no runtime dependency of its own.
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+wayland-client = "0.31"
+# `staging` is what exposes ext_idle_notify in this crate version; the client
+# feature is the API side of the same protocol set.
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 
 [profile.release]
 strip = true

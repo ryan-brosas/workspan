@@ -180,6 +180,37 @@ function dotHint(presence, status, nowMs) {
   return "Dot active " + (age < 60000 ? "just now" : formatDuration(age) + " ago") + " \u2014 not tracked"
 }
 
+/** Within this window after a quiet stretch ends, the popup still mentions it. */
+var IDLE_RECENT_MS = 15 * 60_000
+/** Shorter than a minute is not a review item, whatever the collector was armed with. */
+var IDLE_MIN_REVIEW_MS = 60_000
+
+/**
+ * The return-from-idle nudge: the collector saw no seat input for this stretch. It is
+ * presence, not attendance - nothing was paused and nothing was subtracted, and
+ * whether it was a break is the person's call. The day report carries the history.
+ *
+ * Only a finished stretch is reported. One still open looks the same whether the
+ * person is away or the collector stopped, and a caption may not guess between them.
+ */
+function idleHint(status, nowMs) {
+  var idle = status ? status.last_idle : null
+  if (!idle) return ""
+  var from = number(idle.from)
+  if (from === 0) return ""
+  var open = idle.to === null || idle.to === undefined
+  if (open) return ""
+  var to = number(idle.to)
+  if (to === 0 || to < from) return ""
+  if (Number(nowMs) - to > IDLE_RECENT_MS) return ""
+  // The daemon owns the arithmetic; the widget only decides whether to say it.
+  var away = number(idle.idle_ms)
+  if (away < IDLE_MIN_REVIEW_MS) return ""
+  return open
+    ? "No input for " + formatDuration(away) + " so far"
+    : "No input for " + formatDuration(away) + " \u2014 nothing was paused automatically"
+}
+
 /** One line per thing the user must look at; empty means nothing needs review. */
 function warnings(status) {
   if (!status) return ["No status yet. Start the daemon: workspan daemon"]

@@ -57,8 +57,10 @@ workspan day                              # sessions, notes, pauses and the thre
 ```
 
 On the desktop, the Omarchy bar widget shows the running clock and a popup with
-start/stop, the company picker and the current measures; a caption nudges when
-the ChatGPT Dot profile was recently active and nothing is being tracked.
+start/stop, the company picker and the current measures; one caption nudges when
+the ChatGPT Dot profile was recently active and nothing is being tracked, and another
+reports a finished stretch with no seat input. The idle caption pauses nothing: the
+collector annotates, and only you decide whether that stretch was a break.
 Attribution derives from the focused workspace (Herdr's focused pane, then the
 window's process tree) and resolves client names only from explicit bindings —
 a confirmation line on stderr says what a session was attributed to.
