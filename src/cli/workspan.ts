@@ -2,11 +2,13 @@
 /**
  * The only client. It speaks the local protocol and never opens the database.
  * Usage: workspan status --json | health | ingest --file f.jsonl |
- *        session start --project P | session stop --session S
+ *        session start --project P | session stop --session S |
+ *        day|week [--date YYYY-MM-DD] [--tz ZONE] [--json | --export csv|md]
  */
 import { readFileSync } from "node:fs";
 import { socketPath as defaultSocket } from "../daemon/paths.ts";
-import { request as daemonRequest, batchEvidence, readReport } from "../client.ts";
+import { request as daemonRequest, batchEvidence, eventFitsBatch } from "../spool.ts";
+import { readReport } from "../client.ts";
 import type { Method } from "../protocol.ts";
 import type { Status } from "../daemon/measures.ts";
 import type { Binding } from "./pick.ts";
@@ -56,16 +58,23 @@ async function printUnallocatedRoots(): Promise<void> {
 /** Import in frame-sized batches; numeric counters merge, so the caller sees one result. */
 async function ingestBatched(events: readonly unknown[]): Promise<Record<string, number>> {
   const totals: Record<string, number> = {};
-  const batches = batchEvidence(events);
+  // One record too large for any frame must not abort the whole import: refuse it
+  // individually, deliver everything else, and report the count to the caller.
+  const deliverable = events.filter(eventFitsBatch);
+  const refused = events.length - deliverable.length;
+  // batchEvidence keeps each frame far below the protocol's 64 KiB limit, envelope
+  // included, so an ingest batch built here cannot be refused as frame_too_large.
+  const batches = batchEvidence(deliverable);
   for (const batch of batches) {
-    const result = await request("ingest", { events: batch });
-    if (result && typeof result === "object") {
-      for (const [key, value] of Object.entries(result as Record<string, unknown>)) {
-        if (typeof value === "number") totals[key] = (totals[key] ?? 0) + value;
-      }
-    }
+    const result = await request("ingest", { events: batch }) as Record<string, unknown> | null;
+    // Fail closed: a daemon answer without numeric counters must not read as "no
+    // conflicts" and exit 0 over evidence that was never accounted for.
+    const counters = ["accepted", "duplicates", "conflicts"] as const;
+    if (!result || counters.some(name => typeof result[name] !== "number")) throw new Error(`daemon answered without ingest counters: ${JSON.stringify(result)}`);
+    for (const name of counters) totals[name] = (totals[name] ?? 0) + (result[name] as number);
   }
   totals.batches = batches.length;
+  if (refused > 0) totals.refused_too_large = refused;
   return totals;
 }
 
@@ -238,12 +247,14 @@ async function main(): Promise<number> {
     if (exported && args.includes("--json")) throw new Error("choose --json or --export, not both");
     const format = args.includes("--json") ? "json" : exported ?? "text";
     const text = await readReport({ period: group, format: format as "text" | "json" | "csv" | "md", ...(flag("--date") ? { date: flag("--date") } : {}), ...(flag("--tz") ? { timezone: flag("--tz") } : {}) }, request);
-    process.stdout.write(text.endsWith("\n") ? text : text + "\n");
+    // A pipe write is asynchronous: exiting before the callback would truncate a
+    // week of CSV or a JSON snapshot for whatever is reading it.
+    await new Promise<void>(resolve => { process.stdout.write(text.endsWith("\n") ? text : text + "\n", () => resolve()); });
     return 0;
   }
   if (group === "backup") {
     const raw = flag("--keep");
-    if (args.includes("--keep") && (raw === undefined || !/^\d+$/.test(raw))) throw new Error("--keep must be a positive integer");
+    if (args.includes("--keep") && (raw === undefined || !/^[1-9]\d*$/.test(raw))) throw new Error("--keep must be a positive integer");
     console.log(JSON.stringify(await request("backup", { ...(raw === undefined ? {} : { keep: Number(raw) }) }), null, 2));
     return 0;
   }
@@ -307,7 +318,10 @@ async function main(): Promise<number> {
     // What the daemon's own periodic pass last did, when it is running: detection
     // is automatic, and "never scanned" must not look like "nothing found".
     let automatic: Status["harness"] | null = null;
-    try { automatic = ((await request("status", {})) as Status).harness ?? null; } catch { automatic = null; }
+    try { automatic = ((await request("status", {})) as Status).harness ?? null; }
+    // A diagnostic must not present an unreachable daemon as "no automatic pass":
+    // the failure is named on stderr, and the field stays null.
+    catch (error) { automatic = null; console.error(`workspan harness: cannot read the daemon status: ${error instanceof Error ? error.message : String(error)}`); }
     console.log(JSON.stringify({ readers, automatic }, null, 2));
     return 0;
   }
@@ -364,12 +378,24 @@ async function main(): Promise<number> {
     const piped = args.includes("--stdin");
     if (!file && !piped) throw new Error("ingest needs --file <jsonl> or --stdin");
     const text = file ? readFileSync(file, "utf8") : readFileSync(0, "utf8");
-    let events: unknown[];
-    try { events = text.split("\n").map(line => line.trim()).filter(Boolean).map(line => JSON.parse(line) as unknown); }
-    catch { throw new Error("invalid_jsonl: malformed evidence retained for review"); }
+    // Line by line, so a malformed record is named by position and the cause survives;
+    // `--file` is left exactly as it was, and `--stdin` was consumed by the reader.
+    const lines = text.split("\n");
+    const events: unknown[] = [];
+    for (const [index, line] of lines.entries()) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try { events.push(JSON.parse(trimmed) as unknown); }
+      catch (error) { throw new Error(`invalid_jsonl at line ${index + 1}: ${error instanceof Error ? error.message : String(error)}`); }
+    }
     const result = await ingestBatched(events);
     console.log(JSON.stringify(result, null, 2));
-    if (result.conflicts > 0) { console.error("evidence_conflict: conflicting evidence retained for review"); return 1; }
+    if (result.refused_too_large > 0) { console.error(`event_too_large: ${result.refused_too_large} record(s) exceed the frame limit and were not sent; the file is unchanged`); return 1; }
+    // A conflict is recorded for review, never a delivery failure: the daemon already
+    // holds that identity, so a resend could not change the outcome. Exiting non-zero
+    // would make the collector retry the same spool forever - the stuck lane this
+    // whole delivery path exists to avoid.
+    if (result.conflicts > 0) console.error(`evidence_conflict: ${result.conflicts} record(s) retained for review; the batch is delivered`);
     return 0;
   }
   if (group === "doctor") {

@@ -69,14 +69,15 @@ test("a session crossing midnight is clipped to the day it is reported in", () =
     s.ingest(event("session-start", late, "night"), 1);
     s.ingest(event("session-stop", late + 3 * 60 * 60_000, "night"), 1);
     const third = renderDay(s, { date: "2026-10-03", timezone: tz, now: late + 240 * 60_000 });
-    expect(third.text).toContain("23:00-00:00");
+    // A span clipped to the day boundary ends at the next local midnight, named 24:00
+    // so it cannot be misread as ending where the day starts.
+    expect(third.text).toContain("23:00-24:00");
     expect(third.text).toMatch(/Attested: 1h 00m/);
     const fourth = renderDay(s, { date: "2026-10-04", timezone: tz, now: late + 240 * 60_000 });
     expect(fourth.text).toContain("00:00-02:00");
     expect(fourth.text).toMatch(/Attested: 2h 00m/);
   } finally { s.close(); }
 });
-
 
 test("fractional offsets and DST resolve exact local calendar boundaries", () => {
   expect(dayBounds("2026-10-03", "Asia/Kathmandu").start).toBe(Date.parse("2026-10-02T18:15:00Z"));
@@ -94,7 +95,8 @@ test("a middle day of a long session contains its attested time", () => {
     const from = Date.parse("2026-10-01T09:00:00Z");
     s.ingest(event("session-start", from, "long"), from);
     s.ingest(event("session-stop", from + 4 * 86_400_000, "long"), from);
-    expect(renderDay(s, { date: "2026-10-03", timezone: tz }).text).toContain("Attested: 24h 00m");
+    // A pinned now, so the middle day numbers cannot depend on when the suite runs.
+    expect(renderDay(s, { date: "2026-10-03", timezone: tz, now: from + 3 * 86_400_000 }).text).toContain("Attested: 24h 00m");
   } finally { s.close(); }
 });
 
@@ -105,7 +107,7 @@ test("clipping keeps agent attribution and inferred ambiguity from the shared pr
     s.ingest(validateEvent({ source: "pi", instance: "i", session: "a", event: "end", kind: "agent-end", at: t0 + 3_600_000, origin: "automated", project: "client-b", root: "/b" }), t0);
     s.save({ id: "wa", root: "/a", client: "client-a", sessionId: "a", task: "a", start: t0, end: t0 + 7_200_000, kind: "work" });
     s.save({ id: "wb", root: "/b", client: "client-b", sessionId: "b", task: "b", start: t0 + 1_800_000, end: t0 + 5_400_000, kind: "work" });
-    const report = renderDay(s, { date: "2026-10-03", timezone: tz });
+    const report = renderDay(s, { date: "2026-10-03", timezone: tz, now: t0 + 8 * 3_600_000 });
     expect(report.text).toContain("Agent runtime: 1h 00m (client-b 1h 00m)");
     expect(report.text).toContain("Inferred attended: 2h 00m (client-a 1h 00m, ambiguous 1h 00m)");
     expect(buildStatus(s, { idleGapMs: 900_000 }).measures.inferred.ambiguous_ms).toBe(3_600_000);

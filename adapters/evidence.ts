@@ -7,7 +7,7 @@
  */
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { EvidenceSpool, drainOrphanedSpools, spoolDirectory } from "../src/client.ts";
+import { EvidenceSpool, drainOrphanedSpools, spoolDirectory } from "../src/spool.ts";
 import { EVIDENCE_VERSION } from "../src/daemon/evidence.ts";
 
 /** The event the daemon validates; its allowlist is the authority, not this type. */

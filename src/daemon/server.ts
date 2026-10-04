@@ -2,18 +2,18 @@
  * The daemon: one socket, one writer, one status file. It serves the CLI and the
  * desktop plugin, and it is the only process that opens the database.
  */
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, connect, type Server } from "node:net";
 import { dirname } from "node:path";
-import { createReportPager } from "./report-pages.ts";
-import { drainOrphanedSpools, listSpools, spoolProblems } from "../client.ts";
+import { drainOrphanedSpools, spoolHealth } from "../spool.ts";
 import { createBackup, MAX_BACKUP_KEEP } from "./backup.ts";
 import { buildReport, formatReport } from "./report.ts";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createReportPager } from "./report-pages.ts";
 import { AutomaticClock } from "../core/clock.ts";
 import { encodeFrame, fail, ok, parseRequest, PROTOCOL_VERSION, MAX_FRAME_BYTES, ProtocolError, type Response } from "../protocol.ts";
 import { validateEvent, type EvidenceEvent } from "./evidence.ts";
 import { SCHEMA_VERSION, WorkspanStore, sessionKey, type IngestResult, type SessionRow } from "./db.ts";
-import { buildStatus, coveringSession, idleStretches, scopeFor, type HarnessReaderStatus, type HarnessStatus, type Status, type StatusCache } from "./measures.ts";
+import { buildStatus, coveringSession, idleStretches, scopeFor, type DeliveryStatus, type HarnessReaderStatus, type HarnessStatus, type Status, type StatusCache } from "./measures.ts";
 import { dayBounds, CalendarError } from "./calendar.ts";
 import { localDayKey } from "../core/ledger.ts";
 import { engineInfo, probeEngine } from "./engine.ts";
@@ -45,9 +45,13 @@ export interface DaemonOptions {
    * imports what it finds and reports both in the status file. Off unless asked:
    * the daemon entry point enables it, while an embedded or scratch daemon must
    * never read the user's harness histories or import them into its own database.
+   * Any value above zero is clamped to a 1000 ms floor; a non-finite value is off.
    */
   harnessPollMs?: number;
-  /** How far back an automatic pass re-reads. Replay is safe, so overlap is free. */
+  /**
+   * How far back an automatic pass re-reads, clamped to a 60 000 ms floor and
+   * defaulting to 7 days. Replay is safe, so overlap is free.
+   */
   harnessWindowMs?: number;
   /** Reader override, so a test can drive the pass without a real harness store. */
   harnessReaders?: HarnessReader[];
@@ -75,7 +79,6 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   const statusFile = statusPath(runtimeDir);
   const spoolDir = options.spoolDir ?? dirname(store.path);
 
-
   mkdirSync(runtimeDir, { recursive: true, mode: 0o700 });
   if (await socketIsLive(socketFile)) throw new Error(`another Workspan daemon is already listening on ${socketFile}`);
   if (existsSync(socketFile)) rmSync(socketFile, { force: true });
@@ -91,12 +94,15 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   };
 
   const engine = engineInfo();
+  const finite = (value: number | undefined, fallback: number): number => (typeof value === "number" && Number.isFinite(value) ? value : fallback);
   // Automatic harness detection is enabled by the entry point, never implied for an
   // embedded daemon: a scratch database must not consume the user's live histories.
   // The first pass runs with the daemon, so a restart re-detects every store
-  // instead of waiting a full interval.
-  const harnessPollMs = Math.max(0, options.harnessPollMs ?? 0);
-  const harnessWindowMs = Math.max(60_000, options.harnessWindowMs ?? 7 * 86_400_000);
+  // instead of waiting a full interval. Math.max would propagate NaN, so every
+  // non-finite option falls back to a real value instead of disabling detection.
+  const requestedPollMs = options.harnessPollMs;
+  const harnessPollMs = requestedPollMs === undefined || !Number.isFinite(requestedPollMs) || requestedPollMs <= 0 ? 0 : Math.max(1_000, requestedPollMs);
+  const harnessWindowMs = Math.max(60_000, finite(options.harnessWindowMs, 7 * 86_400_000));
   let harnessStatus: HarnessStatus = {
     interval_ms: harnessPollMs, window_ms: harnessWindowMs,
     polled_at: null, took_ms: null, error: null, readers: [],
@@ -105,16 +111,21 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   // union only when the evidence actually changed.
   const projection: StatusCache = {};
   let cached: Status | null = null;
+  let lastDrainError: string | null = null;
   const refresh = (): Status => {
     const at = now();
     // The day bounds are what turns the cached intervals into a review list; they are
     // recomputed on every write, so a status file cannot carry yesterday's day.
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const day = dayBounds(localDayKey(at, timezone), timezone);
-    const status = buildStatus(store, { idleGapMs, now: at, engine, cache: projection, day });
-    const spools = listSpools({ directory: spoolDir }).filter(file => file.bytes > 0);
-    status.delivery = { pending_files: spools.length, pending_bytes: spools.reduce((sum, file) => sum + file.bytes, 0), issues: spoolProblems(spoolDir).length };
-    status.harness = harnessStatus;
+    // One listing for the pending numbers and the refusal markers: a refresh runs on
+    // every heartbeat and every accepted batch, so a large backlog is never walked twice.
+    const health = spoolHealth(spoolDir);
+    const pending = health.files.filter(file => file.bytes > 0);
+    const delivery: DeliveryStatus = { pending_files: pending.length, pending_bytes: pending.reduce((sum, file) => sum + file.bytes, 0), issues: health.problems.length, error: lastDrainError };
+    // Status assembly has one owner: the transport and detection snapshots go in here
+    // rather than being attached to the result afterwards.
+    const status = buildStatus(store, { idleGapMs, now: at, engine, cache: projection, day, delivery, harness: harnessStatus });
     cached = status;
     const tmp = `${statusFile}.tmp`;
     writeFileSync(tmp, JSON.stringify(status, null, 2) + "\n", { mode: 0o600 });
@@ -132,9 +143,8 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
    */
   const ingestEvent = (event: EvidenceEvent): IngestResult & { at: number } => {
     const human = event.kind === "interaction" && event.origin === "human";
-    const attributed: EvidenceEvent = event.project === undefined
-      ? { ...event, ...(store.resolveProject(event.root ?? "") ? { project: store.resolveProject(event.root ?? "") } : {}) }
-      : event;
+    const resolved = event.project ?? (event.root ? store.resolveProject(event.root) : undefined);
+    const attributed: EvidenceEvent = resolved !== undefined ? { ...event, project: resolved } : event;
     return { ...store.ingest(attributed, now(), e => { if (human) clockFor(e).touch(e.at); }), at: event.at };
   };
 
@@ -143,7 +153,9 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
    * too — not only a newly accepted observation. Duplicates change nothing.
    */
   const settle = (receipts: Array<IngestResult & { at: number }>): Array<IngestResult & { at: number }> => {
-    if (receipts.some(r => r.status !== "duplicate")) refresh();
+    // The evidence is durable by now: a failed status write must not turn a committed
+    // ingest into a client-visible failure that invites a pointless resend.
+    if (receipts.some(r => r.status !== "duplicate")) { try { refresh(); } catch { /* health remains on disk */ } }
     return receipts;
   };
 
@@ -151,12 +163,15 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     const list = (params as { events?: unknown })?.events;
     if (!Array.isArray(list)) throw new ProtocolError("bad_request", "ingest needs an events array");
     if (list.length > 5000) throw new ProtocolError("too_many_events", "ingest accepts at most 5000 events per frame");
-    const receipts: Array<IngestResult & { at: number }> = [];
-    for (const raw of list) {
-      let event: EvidenceEvent;
-      try { event = validateEvent(raw); } catch { throw new ProtocolError("bad_event", "evidence failed validation; retained for review"); }
-      receipts.push(ingestEvent(event));
-    }
+    // Validate the whole frame before the first write: a bad record late in a frame must
+    // not leave earlier events committed with no receipts and no status refresh. A
+    // rejection names the offending slot and a bounded cause, because the client is the
+    // side that retains evidence for review.
+    const events = list.map((raw, index) => {
+      try { return validateEvent(raw); }
+      catch (error) { throw new ProtocolError("bad_event", `event ${index} failed validation: ${bounded(error)}`); }
+    });
+    const receipts = events.map(ingestEvent);
     settle(receipts);
     return {
       accepted: receipts.filter(r => r.status === "accepted").length,
@@ -172,18 +187,33 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
    * fails is named and never hides the others. Replay is safe, so a repeated pass
    * over the same evidence adds nothing and reports that as duplicates.
    */
+  const MAX_PASS_EVENTS = 5_000;
+  const OVERLAP_MS = 86_400_000;
+  let lastPassStartedAt: number | null = null;
   const scanHarness = (): void => {
     const started = now();
     const momentOf = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) ? value : null);
     const textOf = (value: unknown): string | null => (typeof value === "string" ? value : null);
+    // Steady-state passes read only what appeared since the last pass, with a day of
+    // overlap for a store that flushes late; the full window is re-read on the first
+    // pass, and after any failed or bounded pass, where re-importing is the point.
+    const sinceMs = lastPassStartedAt === null ? started - harnessWindowMs : Math.max(started - harnessWindowMs, lastPassStartedAt - Math.min(harnessWindowMs, OVERLAP_MS));
     try {
       const collected = collectHarness({
-        sinceMs: started - harnessWindowMs,
+        sinceMs,
         now: started,
         ...(options.harnessReaders ? { readers: options.harnessReaders } : {}),
       });
+      let deferred = false;
       const readers: HarnessReaderStatus[] = collected.map(entry => {
-        const receipts = entry.events.length ? settle(entry.events.map(ingestEvent)) : [];
+        let error = textOf(entry.summary.error);
+        // One reader must never take the whole pass down, and an unbounded first pass
+        // must not block the event loop: the remainder arrives on the next pass.
+        const events = entry.events.slice(0, MAX_PASS_EVENTS);
+        if (entry.events.length > events.length) { deferred = true; error = `${error ? `${error}; ` : ""}pass bounded: ${entry.events.length - events.length} record(s) deferred to the next pass`; }
+        let receipts: Array<IngestResult & { at: number }> = [];
+        try { receipts = events.map(ingestEvent); }
+        catch (failure) { error = `${error ? `${error}; ` : ""}ingest failed: ${bounded(failure)}`; }
         return {
           id: entry.id,
           source: entry.source,
@@ -191,14 +221,15 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
           available: typeof entry.summary.store === "string",
           last_event_at: momentOf(entry.summary.lastEventAt),
           stale_days: momentOf(entry.summary.staleDays),
-          events: entry.events.length,
+          events: events.length,
           accepted: receipts.filter(r => r.status === "accepted").length,
           duplicates: receipts.filter(r => r.status === "duplicate").length,
           conflicts: receipts.filter(r => r.status === "conflict").length,
-          error: textOf(entry.summary.error),
+          error,
         };
       });
       harnessStatus = { ...harnessStatus, polled_at: started, took_ms: Math.max(0, now() - started), error: null, readers };
+      if (!deferred) lastPassStartedAt = started;
     } catch (error) {
       // A pass that failed before any reader reported is stated, never smoothed
       // into "nothing found".
@@ -422,8 +453,13 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
         return ok(id, createBackup(store, { keep: value.keep as number | undefined, now: now() }));
       }
       case "day": {
-        const value = (params ?? {}) as { date?: string; timezone?: string };
-        const facts = buildReport(store, { ...value, period: "day", now: now(), idleGapMs, engine, cache: projection, delivery: current().delivery });
+        // Only the documented parameters are read, and only when they are non-empty
+        // strings: a type-confused or unknown value is ignored here instead of reaching
+        // the calendar as an internal error or leaking into the report options.
+        const value = (params ?? {}) as { date?: unknown; timezone?: unknown };
+        const date = typeof value.date === "string" && value.date ? value.date : undefined;
+        const timezone = typeof value.timezone === "string" && value.timezone ? value.timezone : undefined;
+        const facts = buildReport(store, { period: "day", ...(date ? { date } : {}), ...(timezone ? { timezone } : {}), now: now(), idleGapMs, engine, cache: projection, delivery: current().delivery });
         return ok(id, { date: facts.date, timezone: facts.timezone, text: formatReport(facts, "text") });
       }
       case "report": return ok(id, pageReport(params));
@@ -433,9 +469,10 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   };
 
   const server: Server = createServer(socket => {
-    let buffer = "";
+    let buffer = "", closed = false;
     socket.setEncoding("utf8");
     socket.on("data", chunk => {
+      if (closed) return;
       buffer += chunk;
       let index: number;
       while ((index = buffer.indexOf("\n")) !== -1) {
@@ -453,10 +490,22 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
           response = fail(id, code, error instanceof ProtocolError || error instanceof CalendarError ? error.message : `request failed: ${bounded(error)}`);
         }
         let output = encodeFrame(response);
-        if (Buffer.byteLength(output) > MAX_FRAME_BYTES) output = encodeFrame(fail(id, "response_too_large", "response exceeds frame limit; use the paged report method for reports"));
+        if (Buffer.byteLength(output) > MAX_FRAME_BYTES) {
+          // The refusal must not echo an id large enough to exceed the limit it is
+          // protecting: a request is legal up to MAX_FRAME_BYTES, id included.
+          const echoed = id.length > 64 ? "" : id;
+          const fallback = encodeFrame(fail(echoed, "response_too_large", "response exceeds frame limit; use the paged report method for reports"));
+          output = Buffer.byteLength(fallback) > MAX_FRAME_BYTES ? encodeFrame(fail("", "response_too_large", "response exceeds frame limit")) : fallback;
+        }
         socket.write(output);
       }
-      if (Buffer.byteLength(buffer) > MAX_FRAME_BYTES) socket.end(encodeFrame(fail("", "frame_too_large", "frame exceeds limit")));
+      if (Buffer.byteLength(buffer) > MAX_FRAME_BYTES) {
+        // Stop reading and parsing: the rest of the oversized frame is still in flight,
+        // and a second end() would only race the refusal out of the socket.
+        closed = true;
+        buffer = "";
+        socket.end(encodeFrame(fail("", "frame_too_large", "frame exceeds limit")));
+      }
     });
     socket.on("error", () => socket.destroy());
   });
@@ -470,7 +519,9 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   // Detection runs with the daemon and on its own interval: no harness needs a
   // per-harness installation, and a restart re-imports what the last pass missed.
   // The first pass is the same function the timer calls.
-  if (harnessPollMs > 0) scanHarness();
+  // The first pass is deferred: it reads local histories synchronously, so a client
+  // that connects during startup must not wait behind it.
+  if (harnessPollMs > 0) setImmediate(scanHarness);
   const harnessTimer = harnessPollMs > 0 ? setInterval(scanHarness, harnessPollMs) : null;
   harnessTimer?.unref?.();
 
@@ -478,8 +529,14 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   let recovery: Promise<void> | null = null;
   const recover = () => {
     if (recovery) return;
-    recovery = drainOrphanedSpools({ directory: spoolDir, socketPath: socketFile })
-      .catch(() => undefined).then(() => { try { refresh(); } catch { /* health remains on disk */ } })
+    // Promise.resolve() first so a synchronous throw can never escape the heartbeat,
+    // and the failure is kept for status instead of vanishing: a queue that never
+    // shrinks without a named cause is not diagnosable.
+    recovery = Promise.resolve()
+      .then(() => drainOrphanedSpools({ directory: spoolDir, socketPath: socketFile }))
+      .then(() => { lastDrainError = null; })
+      .catch(error => { lastDrainError = bounded(error); })
+      .then(() => { try { refresh(); } catch { /* health remains on disk */ } })
       .finally(() => { recovery = null; });
   };
   recover();
@@ -496,7 +553,9 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
     close: async () => {
       clearInterval(heartbeat);
       if (harnessTimer) clearInterval(harnessTimer);
-      if (recovery) await recovery;
+      // A drain talks to this daemon's own socket, the same call the live probe bounds
+      // with a timeout, so a stalled connect must not hold shutdown open forever.
+      if (recovery) await Promise.race([recovery.catch(() => undefined), new Promise<void>(resolve => { const timer = setTimeout(resolve, 5_000); timer.unref?.(); })]);
       await new Promise<void>(resolve => server.close(() => resolve()));
       rmSync(socketFile, { force: true });
       store.close();

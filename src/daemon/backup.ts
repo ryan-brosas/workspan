@@ -51,7 +51,11 @@ export function createBackup(store: WorkspanStore, options: { keep?: number; now
   if (!Number.isSafeInteger(now) || now < 0) throw new Error("now must be a nonnegative safe integer timestamp");
 
   const directory = join(dirname(resolve(store.path)), "backups");
-  if (!lstatSync(directory, { throwIfNoEntry: false })) mkdirSync(directory, { mode: 0o700 });
+  // One look at the entry, then a real directory check: a regular file or a symlink
+  // here would otherwise surface as a raw ENOTDIR or ELOOP from the open below.
+  const existing = lstatSync(directory, { throwIfNoEntry: false });
+  if (existing && (!existing.isDirectory() || existing.isSymbolicLink())) throw new Error(`backup directory ${directory} must be a real directory`);
+  if (!existing) { try { mkdirSync(directory, { mode: 0o700 }); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; } }
   const fd = openSync(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
   let pending = false;
   const path = join(directory, `workspan-backup-${String(now).padStart(16, "0")}-${randomUUID()}.sqlite`);
@@ -59,17 +63,23 @@ export function createBackup(store: WorkspanStore, options: { keep?: number; now
   try {
     if (process.getuid && fstatSync(fd).uid !== process.getuid()) throw new Error("Backup directory must belong to this user");
     fchmodSync(fd, 0o700);
-    store.snapshotTo(temporary);
+    // The partial is reserved before the snapshot, so a failure inside snapshotTo
+    // still leaves the finally responsible for it.
     pending = true;
+    store.snapshotTo(temporary);
     const metadata = validateSnapshot(temporary);
     // link, unlike rename, atomically refuses any existing final destination.
     linkSync(temporary, path);
-    unlinkSync(temporary);
+    // The durable snapshot exists from here on: a failed cleanup is a leftover, not a
+    // failed backup, and the sweep below reclaims it.
+    try { unlinkSync(temporary); } catch { /* the snapshot is linked; nothing is lost */ }
     pending = false;
     fsyncSync(fd);
 
-    // Count only validated, strictly named snapshots. Unknown/corrupt files and
-    // links are left alone, and the just-created backup survives clock rollback.
+    // Count only validated, strictly named snapshots. Unknown/corrupt files, links and
+    // crash leftovers written by anything but this daemon are left alone: the sweep
+    // may only remove a file it can prove it owns. The just-created backup survives
+    // clock rollback, and a leftover partial is reclaimed by an operator, not guessed at.
     const previous = readdirSync(directory).filter(name => MANAGED_NAME.test(name))
       .map(name => join(directory, name)).filter(candidate => candidate !== path)
       .filter(candidate => {

@@ -29,7 +29,13 @@ export interface HarnessProbeRow extends HarnessProbe {
 }
 
 function messageOf(error: unknown): string {
-  return (error instanceof Error ? error.message : String(error)).slice(0, 140);
+  // A blank Error or a bare object must still name the broken reader: an empty or
+  // "[object Object]" diagnostic leaves the store that failed unidentified.
+  const message = typeof error === "string" ? error : error instanceof Error ? error.message : "";
+  if (message.trim()) return message.trim().slice(0, 140);
+  const thrown = typeof error === "object" && error !== null ? error as { code?: unknown } : null;
+  const code = thrown && typeof thrown.code === "string" ? ` (${thrown.code})` : "";
+  return `${error === null ? "null" : typeof error}${code} thrown without a message`.slice(0, 140);
 }
 
 /** Cheap detection pass: which stores exist and how fresh they are. */

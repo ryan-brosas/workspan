@@ -7,7 +7,8 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { WorkspanClient, listSpools, spoolDirectory, spoolProblems } from "../client.ts";
+import { WorkspanClient } from "../client.ts";
+import { listSpools, spoolDirectory, spoolProblems } from "../spool.ts";
 import { defaultDatabasePath, defaultRuntimeDir, socketPath, statusPath } from "../daemon/paths.ts";
 import type { Status } from "../daemon/measures.ts";
 
@@ -79,7 +80,9 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
 
   // Adapter spools are evidence in transit: an empty file is litter a producer left
   // behind, a non-empty one is something that has not reached the daemon.
-  const spools = listSpools({ directory: options.spoolDir ?? spoolDirectory() });
+  // One directory for both delivery checks, so they can never inspect two different places.
+  const spoolDir = options.spoolDir ?? spoolDirectory();
+  const spools = listSpools({ directory: spoolDir });
   const pending = spools.filter(file => file.bytes > 0);
   if (!pending.length) {
     checks.push({ name: "adapter spools", state: "ok", detail: spools.length === 0 ? "none" : `${spools.length} empty file(s) left by producers` });
@@ -113,7 +116,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
   const conflicts = status?.coverage?.conflicts ?? 0;
   if (conflicts) checks.push({ name: "evidence conflicts", state: "attention", detail: `${conflicts} record(s) retained for review; day/week reports warn with conflicting_evidence` });
 
-  const problems = spoolProblems(options.spoolDir ?? spoolDirectory());
+  const problems = spoolProblems(spoolDir);
   if (problems.length) checks.push({ name: "evidence delivery", state: "attention", detail: `${problems.length} delivery/refusal marker(s): ${[...new Set(problems.map(problem => problem.code))].join(", ")}; inspect metadata in the spool directory` });
 
   const sources = status?.coverage?.sources ?? [];

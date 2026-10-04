@@ -24,11 +24,17 @@ export interface ReportFacts {
   measures: Record<MeasureName, MeasureStatus>; days: DayFacts[]; coverage: Status["coverage"]; warnings: string[]; non_additive: string;
 }
 const union = (intervals: readonly Bounds[]): number => intervals.length ? reconcileIntervals([intervals])[0] : 0;
-const measureSet = (intervals: Record<MeasureName, Attributed[]>, bounds: Bounds): Record<MeasureName, MeasureStatus> => ({
+const measureSet = (intervals: Record<MeasureName, readonly Attributed[]>, bounds: Bounds): Record<MeasureName, MeasureStatus> => ({
   attested: measure(clip(intervals.attested, bounds)), inferred: measure(clip(intervals.inferred, bounds)), agent: measure(clip(intervals.agent, bounds)),
 });
-function recordedLate(observations: readonly Observation[], row: SessionRow): boolean {
-  return observations.some(event => event.source === "manual" && event.session === row.session && ((event.kind === "session-start" && event.at === row.startedAt) || (event.kind === "session-stop" && event.at === row.endedAt)) && event.receivedAt - event.at > 60_000);
+/** Manual attestations that reached the ledger over a minute after the event they record. */
+function lateKeys(observations: readonly Observation[]): Set<string> {
+  const keys = new Set<string>();
+  for (const event of observations) {
+    if (event.source !== "manual" || event.receivedAt - event.at <= 60_000) continue;
+    if (event.kind === "session-start" || event.kind === "session-stop") keys.add(`${event.session}\u0000${event.kind}\u0000${event.at}`);
+  }
+  return keys;
 }
 
 export function buildReport(store: WorkspanStore, options: ReportOptions = {}): ReportFacts {
@@ -44,11 +50,18 @@ export function buildReport(store: WorkspanStore, options: ReportOptions = {}): 
   const observations = store.observations(), rows = store.sessionRows(), transitions = store.sessionTransitions(), notes = store.sessionNotes();
   const annotations = (stretches: Array<{ from: number; to: number | null }>, day: Bounds): Annotation[] => clip(stretches.map(stretch => ({ start: stretch.from, end: stretch.to ?? now, open: stretch.to === null })), day);
   const away = idleStretches(observations), held = inhibitStretches(observations);
+  // One index per table: a week report maps hundreds of sessions, and scanning every
+  // table once per row per day is quadratic for no reason.
+  const transitionsBySession = new Map<string, typeof transitions>();
+  for (const transition of transitions) { const list = transitionsBySession.get(transition.sessionId); if (list) list.push(transition); else transitionsBySession.set(transition.sessionId, [transition]); }
+  const notesBySession = new Map<string, string[]>();
+  for (const note of notes) { const list = notesBySession.get(note.sessionId); if (list) list.push(note.text); else notesBySession.set(note.sessionId, [note.text]); }
+  const late = lateKeys(observations);
   const days: DayFacts[] = dates.map((date, i) => {
     const day = bounds[i];
     const intersecting = rows.filter(row => row.startedAt < day.end && (row.endedAt ?? now) > day.start);
     const sessions = intersecting.filter(row => row.removedAt === null).map(row => {
-      const rowTransitions = transitions.filter(t => t.sessionId === row.id && t.at >= row.startedAt && t.at <= (row.endedAt ?? now));
+      const rowTransitions = (transitionsBySession.get(row.id) ?? []).filter(t => t.at >= row.startedAt && t.at <= (row.endedAt ?? now));
       const spans = clip(activeSpans(row.startedAt, row.endedAt ?? now, rowTransitions), day);
       const worked = union(spans);
       const wall = clip([{ start: row.startedAt, end: row.endedAt ?? now }], day);
@@ -56,8 +69,9 @@ export function buildReport(store: WorkspanStore, options: ReportOptions = {}): 
         session: row.session, project: row.project, root: row.root, state: row.state,
         started_at: row.startedAt, ended_at: row.endedAt, spans,
         worked_ms: row.endedAt === null ? 0 : worked, paused_ms: Math.max(0, union(wall) - worked),
-        provisional_ms: row.endedAt === null ? worked : null, recorded_later: recordedLate(observations, row),
-        notes: notes.filter(note => note.sessionId === row.id).map(note => note.text),
+        provisional_ms: row.endedAt === null ? worked : null,
+        recorded_later: late.has(`${row.session}\u0000session-start\u0000${row.startedAt}`) || late.has(`${row.session}\u0000session-stop\u0000${row.endedAt}`),
+        notes: notesBySession.get(row.id) ?? [],
       };
     });
     const all = Object.values(projection.intervals).flat();
@@ -86,8 +100,19 @@ export function buildReport(store: WorkspanStore, options: ReportOptions = {}): 
 }
 
 const LABELS: Record<MeasureName, string> = { attested: "Attested", inferred: "Inferred attended", agent: "Agent runtime" };
-export function duration(ms: number): string { const minutes = Math.round(ms / 60_000), hours = Math.floor(minutes / 60), rest = minutes % 60; return hours <= 0 ? `${rest}m` : `${hours}h ${String(rest).padStart(2, "0")}m`; }
-const clock = (at: number, timezone: string): string => new Intl.DateTimeFormat("en-GB", { timeZone: timezone, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(at));
+/** Whole minutes, and never rounded across the minute boundary: sub-minute time says so. */
+export function duration(ms: number): string {
+  if (ms > 0 && ms < 60_000) return "<1m";
+  const minutes = Math.round(ms / 60_000), hours = Math.floor(minutes / 60), rest = minutes % 60;
+  return hours <= 0 ? `${rest}m` : `${hours}h ${String(rest).padStart(2, "0")}m`;
+}
+const clocks = new Map<string, Intl.DateTimeFormat>();
+/** Local wall-clock label; the formatter is cached because a week report renders hundreds of them. */
+export function clock(at: number, timezone: string): string {
+  let formatter = clocks.get(timezone);
+  if (!formatter) { formatter = new Intl.DateTimeFormat("en-GB", { timeZone: timezone, hour: "2-digit", minute: "2-digit", hour12: false }); clocks.set(timezone, formatter); }
+  return formatter.format(new Date(at));
+}
 function measuresText(measures: Record<MeasureName, MeasureStatus>): string[] {
   return MEASURES.map(name => {
     const value = measures[name];
@@ -102,29 +127,32 @@ export function renderText(report: ReportFacts): string {
   if (report.period === "week") lines.push(`Workspan week ${report.date} (${report.timezone})`, "", "Measures for the week (separate, never added together)", "", ...measuresText(report.measures), "");
   for (const day of report.days) {
     lines.push(`Workspan day ${day.date} (${report.timezone})`, "", "Attested sessions", "");
+    // A span that reaches the day boundary ends at the next local midnight, which is
+    // clearer as 24:00 than as a second 00:00 on the same line.
+    const clockOf = (at: number): string => (at === day.end ? "24:00" : clock(at, report.timezone));
     if (!day.sessions.length) lines.push("  none");
     for (const row of day.sessions) {
       const project = row.project ?? "unallocated", late = row.recorded_later ? "  (recorded later)" : "";
-      if (row.ended_at === null) lines.push(`  ${clock(Math.max(row.started_at, day.start), report.timezone)}-open   ${project}  still running, provisional ${duration(row.provisional_ms ?? 0)}${row.state === "paused" ? " (paused)" : ""}${late}`);
+      if (row.ended_at === null) lines.push(`  ${clockOf(Math.max(row.started_at, day.start))}-open   ${project}  still running, provisional ${duration(row.provisional_ms ?? 0)}${row.state === "paused" ? " (paused)" : ""}${late}`);
       else {
-        const when = row.spans.map(span => `${clock(span.start, report.timezone)}-${clock(span.end, report.timezone)}`).join(", ");
-        lines.push(`  ${when || clock(Math.max(row.started_at, day.start), report.timezone)}   ${project}  ${duration(row.worked_ms)}${row.paused_ms ? `  (paused ${duration(row.paused_ms)})` : ""}${late}`);
+        const when = row.spans.map(span => `${clockOf(span.start)}-${clockOf(span.end)}`).join(", ");
+        lines.push(`  ${when || clockOf(Math.max(row.started_at, day.start))}   ${project}  ${duration(row.worked_ms)}${row.paused_ms ? `  (paused ${duration(row.paused_ms)})` : ""}${late}`);
       }
       for (const note of row.notes) lines.push(`    - ${note}`);
     }
     lines.push("", "Measures for the day (separate, never added together)", "", ...measuresText(day.measures));
     lines.push("", "Not counted (no measure covers this stretch)", "");
     if (!day.uncovered.length) lines.push("  none");
-    for (const stretch of day.uncovered) lines.push(`  ${clock(stretch.start, report.timezone)}-${clock(stretch.end, report.timezone)}   ${duration(stretch.end - stretch.start)}`);
+    for (const stretch of day.uncovered) lines.push(`  ${clockOf(stretch.start)}-${clockOf(stretch.end)}   ${duration(stretch.end - stretch.start)}`);
     if (day.uncovered.length) lines.push("  attest one with: workspan session start --at HH:MM");
     for (const [title, stretches, missing] of [["Away (seat idle annotations, never subtracted)", day.away, "resume"], ["Held awake (idle inhibit annotations, never subtracted)", day.held_awake, "clear"]] as const) {
       lines.push("", title, "");
       if (!stretches.length) lines.push("  none");
-      for (const stretch of stretches) lines.push(`  ${clock(stretch.start, report.timezone)}-${stretch.open ? "open" : clock(stretch.end, report.timezone)}   ${stretch.end - stretch.start < 60_000 ? "<1m" : duration(stretch.end - stretch.start)}${stretch.open ? ` (no ${missing} recorded)` : ""}`);
+      for (const stretch of stretches) lines.push(`  ${clockOf(stretch.start)}-${stretch.open ? "open" : clockOf(stretch.end)}   ${duration(stretch.end - stretch.start)}${stretch.open ? ` (no ${missing} recorded)` : ""}`);
     }
     lines.push("", "Collection (desktop lane health)", "");
     const counts = Object.entries(day.collection.counts).sort().map(([name, count]) => `${count} ${name}`);
-    lines.push(counts.length ? `  ${counts.join(", ")} (last ${clock(day.collection.last_at!, report.timezone)})` : "  none");
+    lines.push(counts.length ? `  ${counts.join(", ")} (last ${clockOf(day.collection.last_at!)})` : "  none");
     const removals = day.removed_sessions ? `, ${day.removed_sessions} removed session(s) (corrected)` : "";
     lines.push("", `Engine: Bend via ${report.engine.label}. Coverage: ${report.coverage.events} events, ${report.coverage.conflicts} conflict(s)${report.coverage.conflicts ? " need review" : ""}${removals}.`);
     if (report.coverage.open_agent_turns) lines.push(`Open agent turns: ${report.coverage.open_agent_turns} (end unknown, not finalized).`);

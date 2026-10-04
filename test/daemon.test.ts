@@ -102,7 +102,9 @@ test("a conflict is visible in the materialized status, not only in the receipt"
   writeFileSync(conflictFile, JSON.stringify({ v: 1, source: "pi", instance: "laptop", session: "s1", event: "e1", kind: "interaction", at: base, origin: "human", project: "other-client" }) + "\n");
   const refused = await cli("ingest", "--file", conflictFile);
   expect(JSON.parse(refused.stdout)).toMatchObject({ accepted: 0, conflicts: 1 });
-  expect(refused.code).toBe(1);
+  // The batch counts as delivered: the conflict is recorded for review, and a non-zero
+  // exit would make the collector retry the same spool forever (see packaging/collector-ingest.sh).
+  expect(refused.code).toBe(0);
   expect(refused.stderr).toContain("evidence_conflict");
 
   const status = JSON.parse((await cli("status")).stdout) as ReturnType<typeof readStatusFile>;

@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { WorkspanClient } from "../src/client.ts";
 import { reconcileIntervals } from "../src/core/native.ts";
-import { clip, dayBounds, shiftDate, type Bounds } from "../src/daemon/calendar.ts";
+import { calendarDate, clip, dayBounds, shiftDate, type Bounds } from "../src/daemon/calendar.ts";
 import { localDayKey } from "../src/core/ledger.ts";
 import type { ReportFacts } from "../src/daemon/report.ts";
 export interface TrackerWindow { start: number; end: number; kind: string }
@@ -25,8 +25,14 @@ async function main(): Promise<void> {
   if (!Number.isSafeInteger(days) || days < 1 || days > 366) throw new Error("--days must be 1-366");
   const timezone = flag("--tz") ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
   const trackerPath = flag("--tracker") ?? join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"), "pi-time-tracker", "tracker.sqlite");
-  const windows = trackerWindows(trackerPath), client = new WorkspanClient({ socketPath: flag("--socket") });
+  // Name the file that could not be read: the raw SQLite message does not.
+  let windows: TrackerWindow[];
+  try { windows = trackerWindows(trackerPath); }
+  catch (error) { throw new Error(`cannot read ${trackerPath}: ${error instanceof Error ? error.message : String(error)}`); }
+  const client = new WorkspanClient({ socketPath: flag("--socket") });
   const anchor = flag("--date") ?? localDayKey(Date.now(), timezone);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(anchor)) throw new Error("--date must be YYYY-MM-DD");
+  calendarDate(anchor);
   console.log(`Tracker ledger: ${trackerPath} (${windows.length} windows)`);
   console.log(`Workspan socket: ${client.socketPath}`);
   console.log(`Days: ${days}, timezone: ${timezone}; all values and deltas are exact milliseconds`);
@@ -39,7 +45,14 @@ async function main(): Promise<void> {
       const report = JSON.parse(await client.report({ period: "day", date, timezone, format: "json" })) as ReportFacts;
       if (report.start !== bounds.start || report.end !== bounds.end || report.timezone !== timezone) throw new Error("report range does not match source range");
       console.log([date.padEnd(12), String(source).padEnd(14), String(report.measures.inferred.union_ms).padEnd(14), String(report.measures.attested.union_ms).padEnd(14), String(report.measures.agent.union_ms).padEnd(14), report.measures.inferred.union_ms - source].join(""));
-    } catch { unavailable = true; console.log(`${date}  ${source}  unavailable (not zero)`); }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      // A target that answered with different bounds is a mismatch to fix, not an
+      // availability problem, and it must never be smoothed into "unavailable".
+      if (reason.includes("report range does not match source range")) throw new Error(`${date}: ${reason}`);
+      unavailable = true;
+      console.log(`${date}  ${source}  unavailable (not zero): ${reason}`);
+    }
   }
   console.log("Attested, inferred and agent runtime are separate measures, never added together.");
   if (unavailable) throw new Error("reconciliation incomplete: target report unavailable");

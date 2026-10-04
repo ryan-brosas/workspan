@@ -20,10 +20,18 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 // The daemon transport and the spool rules live in the shared client library, so an
 // adapter cannot drift from docs/protocol.md.
-import { EvidenceSpool, defaultSocketPath, drainOrphanedSpools as drainSpools, spoolDirectory } from "../../src/client.ts";
+import { EvidenceSpool, defaultSocketPath, drainOrphanedSpools as drainSpools, spoolDirectory } from "../../src/spool.ts";
 import { EVIDENCE_VERSION } from "../../src/daemon/evidence.ts";
 
-/** Presence ticks land in fixed ten-second buckets: the same id for the same burst. */
+/**
+ * Presence ticks land in fixed ten-second buckets: the same id for the same burst.
+ * A bucket names the interval `[bucket * TICK_MS, (bucket + 1) * TICK_MS)`, and the tick
+ * carries the interval start, so a tick can be dated up to one bucket before the input
+ * that produced it - at a local-day boundary that can be the previous day. Ten seconds
+ * is inside the reporting granularity (labels are minute-level) and the bucket is what
+ * makes ticks idempotent under replay. The width is part of the id: changing TICK_MS
+ * mints new identities instead of colliding with persisted ones.
+ */
 export const TICK_MS = 10_000;
 
 /**
@@ -68,7 +76,7 @@ function toEvidence(observation: PresenceObservation, instance: string): Evidenc
   if (observation.what === "tick") {
     const bucket = Math.floor(observation.at / TICK_MS);
     // Bucket identity requires bucket-stable metadata, including its timestamp.
-    return { ...base, at: bucket * TICK_MS, event: "tick-v2-" + bucket, kind: "interaction", origin: "human" };
+    return { ...base, at: bucket * TICK_MS, event: `tick-v2-${TICK_MS}-${bucket}`, kind: "interaction", origin: "human" };
   }
   // A settled turn is evidence a human was there to see it, so it carries presence
   // as well as runtime: work between questions belongs to the session.

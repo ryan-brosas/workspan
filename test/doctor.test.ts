@@ -72,7 +72,10 @@ test("doctor tells a quiet seat from a stopped ingest loop, and sees stranded ev
     expect(pending.checks.find(check => check.name === "adapter spools")?.state).toBe("attention");
     writeFileSync(join(spoolDir, "pi-spool-9000003.jsonl.loss"), JSON.stringify({ code: "evidence_spool_full", at: Date.now() }));
     const refused = await runDoctor({ socketPath, runtimeDir, databasePath, spoolDir });
-    expect(refused.checks.find(check => check.name === "evidence delivery")?.state).toBe("attention");
-    expect(refused.checks.find(check => check.name === "evidence delivery")?.detail).toContain("evidence_spool_full");
+    const delivery = refused.checks.find(check => check.name === "evidence delivery");
+    expect(delivery?.state).toBe("attention");
+    // The marker names the failure: the pending spool from the check above is still there,
+    // so "attention" alone could not be attributed to the loss record.
+    expect(delivery?.detail).toContain("evidence_spool_full");
   } finally { await daemon.close(); }
 });
