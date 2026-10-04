@@ -92,7 +92,9 @@ frame limit. [Report semantics](docs/reports.md) describe JSON/CSV/Markdown and
 [delivery recovery](docs/delivery.md) describes bounded spools, retry and refusals.
 [Backups](docs/backup.md) preserve a consistent ledger and prune only validated
 managed backup files, never evidence. The optional backup timer
-(`packaging/workspan-backup.timer`) is packaged, not enabled by default.
+(`packaging/workspan-backup.timer`) is packaged, not enabled by default. Merging to
+`main` releases itself: the version is derived from the commits that landed and
+published with the plugin package, as [releases](docs/release.md) describes.
 
 Binding confirmation changes future ingestion only; immutable-source replay across
 binding changes, audited history corrections/undo and attribution review in the
