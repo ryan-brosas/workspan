@@ -20,7 +20,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 // The daemon transport and the spool rules live in the shared client library, so an
 // adapter cannot drift from docs/protocol.md.
-import { EvidenceSpool, drainOrphanedSpools as drainSpools, spoolDirectory } from "../../src/client.ts";
+import { EvidenceSpool, defaultSocketPath, drainOrphanedSpools as drainSpools, spoolDirectory } from "../../src/client.ts";
 import { EVIDENCE_VERSION } from "../../src/daemon/evidence.ts";
 
 /** Presence ticks land in fixed ten-second buckets: the same id for the same burst. */
@@ -116,8 +116,9 @@ type SessionCtx = {
 };
 
 export default function workspanPiAdapter(pi: ExtensionAPI): void {
-  const socketPath = process.env.WORKSPAN_SOCKET
-    ?? join(process.env.XDG_RUNTIME_DIR ?? "/run/user/1000", "workspan", "workspan.sock");
+  // One rule for every client: WORKSPAN_SOCKET wins, then the shared client's runtime
+  // directory, which honours WORKSPAN_RUNTIME_DIR the way the CLI does.
+  const socketPath = process.env.WORKSPAN_SOCKET ?? defaultSocketPath();
   const emitter = new WorkspanEmitter({ socketPath });
 
   // One process can host several sessions over its life - switches, automation,

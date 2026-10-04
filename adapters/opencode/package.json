@@ -1,0 +1,11 @@
+{
+  "name": "workspan-opencode-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Workspan evidence plugin for opencode: agent runtime and prompt presence, never prompt content.",
+  "main": "index.ts",
+  "exports": { ".": "./index.ts" },
+  "peerDependencies": { "@opencode-ai/plugin": "*" }
+}

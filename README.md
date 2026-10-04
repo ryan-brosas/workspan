@@ -96,6 +96,19 @@ Each reader is read-only, timing-only and replay-safe: running an import twice
 adds nothing. A store that is missing, stale or of an unknown shape is reported
 as unavailable rather than as zero activity.
 
+### Live adapters
+
+| Adapter | Surface | State |
+| --- | --- | --- |
+| Pi | in-process extension (`adapters/pi`) | installed in Pi's `packages`, shadow phase, delivering |
+| opencode | plugin (`adapters/opencode`) | installed in `opencode.json`; the shared app-server must be restarted before it loads |
+| Claude Code | hooks (`adapters/claude/hook.ts`) | installed for UserPromptSubmit / Stop / SubagentStop / SessionEnd |
+| Codex | none confirmed | 0.158 ships a plugin/hook trust system whose declaration format is not documented locally, so the history reader stays the Codex lane |
+
+An adapter emits only `{ root, session, at, kind, origin }` through `src/client.ts`,
+and the daemon resolves attribution. None of them starts a session: attestation is the
+person's, and a queued prompt is presence of unknown origin rather than attendance.
+
 ## How it fits
 
 ```text
