@@ -16,7 +16,7 @@ $XDG_RUNTIME_DIR/workspan/workspan.sock       the daemon socket, used by the CLI
 | --- | --- |
 | Bar | The strongest *attended* evidence (attested if any, else inferred) as `1:05`; dimmed with a dot when the daemon has stopped writing, plus an optional glyph |
 | Tooltip | All three measures side by side, and the sentence that they are never added together |
-| Popup | **Clock in / Clock out** first, with Pause/Resume, Stop, Refresh and Save note, plus the activity field that rides with them. Then the session line with state and provisional time, each measure against the projects it is allocated to, unallocated and ambiguous evidence, coverage warnings, and the seat-idle nudge |
+| Popup | The session buttons that were always there - **Start session / Pause / Resume / Stop / Refresh** - and below them the manual activity draft: a one-line field with **Clock in / Clock out**, **Save note** and **Discard draft**. Then the session line with state and provisional time, each measure against the projects it is allocated to, unallocated and ambiguous evidence, coverage warnings, and the seat-idle nudge |
 
 For a single key or menu row, `workspan session toggle` starts when nothing is open and stops
 what is open. The Omarchy menu already carries both paths: **Start / stop tracking**
@@ -45,8 +45,14 @@ time worked, so it is shown in the popup with its own label.
   `workspan note --idle "lunch"`, which lands on the session the stretch fell in.
 
 The popup's activity field is that same note: one line, at most 200 characters, typed by
-the person - the ledger's only free text. **Clock out** writes it as the session note and
-clears the field; **Save note** attaches it to the running session without stopping it.
+the person - the ledger's only free text. **Save note** files it to the session it was
+typed in, without stopping that session; **Clock out** closes the session and sends the
+field as its closing note; **Stop** is the plain stop and never sends it. The field clears
+only after the daemon accepts the command - a failed or busy command keeps the text.
+A draft whose session has since stopped or switched still belongs to that session: the
+popup says so, Save note names that session explicitly, and it never rides along with
+a different session's clock out. Enter saves a note and never clocks in; Escape hands
+the keys back to the panel without clearing anything.
 Attribution stays the company picker: nothing is inferred from what you type.
 - A "not counted" caption: when no measure covers half an hour or more of the day,
   the popup says how much. It is the review list from `workspan day` - nothing was
@@ -65,6 +71,16 @@ Attribution stays the company picker: nothing is inferred from what you type.
   `OpticalGlyph` exactly like the stock clock: text when the bar is horizontal,
   one glyph per stacked line when it is vertical (`1h` over `05m`), with the
   bar's native tooltip, press states and offline dimming.
+- **Decisions in a plain library, not in QML.** The shell's stock components
+  cannot run under `qml` or `qmltestrunner` outside the shell itself: the
+  `qs.Commons` singletons import Quickshell, and that module exits with no
+  objects loaded (plain QtQuick loads offscreen; importing `Quickshell` or
+  `qs.Commons` fails, verified 2026-10-05). Every argv and draft decision
+  therefore lives in `Draft.js` and `Workspan.js` - pure `.pragma library`
+  files that `node --test` executes directly - and the QML stays a thin
+  binding to stock components. Keyboard focus behavior (the `PanelKeyCatcher`
+  `blocked` binding) is checked live on the bar; stubbing the stock components
+  for a green test is not an option.
 
 ## Settings
 
@@ -90,7 +106,7 @@ scripts/install-plugin.sh --from ~/Downloads/workspan.tracker-0.2.2.zip   # a re
 scripts/install-plugin.sh --verify-only      # compare what is installed with the source
 ```
 
-The script installs the four plugin files and fails unless every installed file matches
+The script installs every plugin file and fails unless each installed file matches
 the source byte for byte - the check that catches a stale widget, which looks exactly
 like a missing feature. A previous copy is backed up under
 `~/.local/state/workspan/plugin-backups/`, never inside the plugins directory: a backup

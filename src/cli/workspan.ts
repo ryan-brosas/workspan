@@ -215,7 +215,16 @@ async function main(): Promise<number> {
     // One command while the session is open; --note on stop covers the common case.
     // --session attaches to a past session, and --idle attaches to the session the
     // last finished seat-idle stretch happened in - what the popup nudge asks for.
-    const text = positional.slice(1).join(" ");
+    // The words are scanned from the tokens after the group: a note is not a flag,
+    // so "--debugged the parser" stays the person's words instead of vanishing.
+    const start = args.indexOf("note") + 1;
+    const words: string[] = [];
+    for (let i = start; i < args.length; i++) {
+      if (args[i] === "--idle") continue;
+      if (args[i] === "--session" || args[i] === "--socket") { i++; continue; }
+      words.push(args[i]);
+    }
+    const text = words.join(" ");
     if (!text) throw new Error("usage: workspan note <what you did> [--session S | --idle]");
     const target = flag("--session");
     console.log(JSON.stringify(await request("session.note", {

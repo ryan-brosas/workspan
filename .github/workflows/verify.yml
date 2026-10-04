@@ -57,7 +57,7 @@ jobs:
       - name: Test policy, lanes, daemon and adapters
         run: bun run test
       - name: Test the widget helpers on plain Node
-        run: node --test plugin/tests/workspan.test.mjs
+        run: node --test plugin/tests/
       # The Omarchy CLI lives on an Omarchy desktop, so the manifest is validated
       # from its own contract here rather than shelling out to it.
       - name: Validate the plugin manifest

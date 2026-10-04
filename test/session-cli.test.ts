@@ -60,3 +60,34 @@ test("the widget's clock in and out commands drive one attested session end to e
   // Both activities are the person's own words, kept in order.
   expect(session!.notes).toContain("paired with the agent");
 });
+
+test("the draft paths: previous-session notes, leading-dash words, one line only", async () => {
+  const root = mkdtempSync(join(tmpdir(), "workspan-draft-edges-"));
+  const runtimeDir = join(root, "run");
+  const store = new WorkspanStore(join(root, "workspan.sqlite"));
+  const local = await startDaemon({ store, runtimeDir, idleGapMs: 900_000 });
+  const send = async (...args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> => {
+    const proc = Bun.spawn([process.execPath, join(import.meta.dir, "../src/cli/workspan.ts"), "--socket", join(runtimeDir, "workspan.sock"), ...args], { stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+    return { code: await proc.exited, stdout, stderr };
+  };
+  try {
+    const started = JSON.parse((await send("session", "start")).stdout) as { session: string };
+    // Plain stop stores no note.
+    expect((await send("session", "stop", "--session", started.session)).code).toBe(0);
+    // The widget's Save note after a stop: the draft still files to that session.
+    expect((await send("note", "drafted while it ran", "--session", started.session)).code).toBe(0);
+    // A note is not a flag: leading dashes stay the words of the person.
+    expect((await send("note", "--debugged the parser", "--session", started.session)).code).toBe(0);
+    // A note stays a single line, as the daemon requires.
+    expect((await send("note", "two\nlines", "--session", started.session)).code).not.toBe(0);
+    const facts = JSON.parse((await send("day", "--json")).stdout) as { days: Array<{ sessions: Array<{ notes: string[]; ended_at: number | null }> }> };
+    const row = facts.days.flatMap(day => day.sessions).find(session => session.notes.includes("drafted while it ran"));
+    expect(row).toBeDefined();
+    expect(row!.ended_at).not.toBeNull();
+    expect(row!.notes).toContain("--debugged the parser");
+    expect(row!.notes.some(note => note.includes("two\nlines"))).toBe(false);
+  } finally {
+    await local.close(); store.close(); rmSync(root, { recursive: true, force: true });
+  }
+});

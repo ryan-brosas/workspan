@@ -42,7 +42,7 @@ if [ -n "$from" ]; then
   [ -d "$source_dir" ] || { echo "install-plugin: $from does not contain workspan.tracker/" >&2; exit 2; }
 fi
 
-files=(manifest.json Panel.qml Workspan.js README.md)
+files=(manifest.json Panel.qml SessionControls.qml Draft.js Workspan.js README.md)
 for name in "${files[@]}"; do
   [ -f "$source_dir/$name" ] || { echo "install-plugin: missing $source_dir/$name" >&2; exit 2; }
 done

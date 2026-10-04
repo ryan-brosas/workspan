@@ -145,23 +145,32 @@ assert.match(W.tooltip(running, NOW, 30), /middle-click to clock in\/out/)
 // comes before the advisory text and the company picker that used to push it below
 // the fold of a scrolling popup.
 const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
-assert.match(panel, /text: root\.sessionOpen \? "Clock out" : "Clock in"/)
-assert.ok(panel.indexOf("Clock in") < panel.indexOf("root.idleHint"), "the clock row must precede the idle nudge")
+const controls = fs.readFileSync(new URL("../SessionControls.qml", import.meta.url), "utf8")
+// The controls are the whole action surface and stay above everything
+// advisory: the session buttons that were always there, plus the draft.
+assert.ok(panel.indexOf("SessionControls") < panel.indexOf("root.idleHint"), "the controls must precede the idle nudge")
 // The picker block, not the property assignment far above it in the Process handler.
-assert.ok(panel.indexOf("Clock in") < panel.indexOf("root.companies.length > 0"), "the clock row must precede the company picker")
-assert.ok(panel.indexOf("Clock in") < panel.indexOf("Workspan.displayRows(root.snapshot)"), "the clock row must precede the measures")
-
-// Clocking in and out is an additional action, never a replacement: the session
-// controls that were there before stay there.
-assert.match(panel, /text: "Stop"/)
-assert.match(panel, /text: "Save note"/)
-
-// The activity field mirrors the daemon note bound, and rides with the clock
-// actions: a note on the way out, or a note attached while the session runs.
-assert.match(panel, /placeholderText: "What were you doing\?/)
-assert.match(panel, /maximumLength: 200/)
-assert.match(panel, /args = args\.concat\(\["--note", note\]\)/)
-assert.match(panel, /root\.runCli\(\["note", note\]\)/)
+assert.ok(panel.indexOf("SessionControls") < panel.indexOf("root.companies.length > 0"), "the controls must precede the company picker")
+assert.ok(panel.indexOf("SessionControls") < panel.indexOf("Workspan.displayRows(root.snapshot)"), "the controls must precede the measures")
+// Wiring: a dispatch refusal is not a save, a draft clears only when the daemon
+// accepted the command that carried it, and the panel's shortcuts stand down
+// while the controls own keys.
+assert.match(panel, /blocked: controls\.activeFocus/)
+assert.match(panel, /controls\.completeCommand\(code === 0\)/)
+assert.match(panel, /if \(cliProcess\.running\) return false/)
+// Manual clocking stays an addition: every original session button is still
+// there, and every argv decision about the draft lives in Draft.js, whose laws
+// draft.test.mjs executes.
+assert.match(controls, /text: "Start session"/)
+assert.match(controls, /text: root\.paused \? "Resume" : "Pause"/)
+assert.match(controls, /text: "Stop"/)
+assert.match(controls, /text: root\.session !== "" \? "Clock out" : "Clock in"/)
+assert.match(controls, /text: "Save note"/)
+assert.match(controls, /text: "Discard draft"/)
+assert.match(controls, /maximumLength: 200/)
+assert.match(controls, /Draft\.noteArgv/)
+assert.match(controls, /Draft\.clockOutArgv/)
+assert.match(controls, /Draft\.stopArgv/)
 assert.match(W.tooltip(status, NOW, 30), /never added together/)
 assert.match(W.NON_ADDITIVE, /never added together/)
 

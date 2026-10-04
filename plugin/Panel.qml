@@ -42,12 +42,6 @@ Panel {
   property double nowMs: Date.now()
   property string lastError: ""
   property bool busy: false
-  /**
-   * What the time was for. This is the ledger's one free-text field (single line,
-   * at most 200 characters, exactly the CLI's bound), typed by the person and
-   * attached to the session either when clocking out or with Save note.
-   */
-  property string activity: ""
 
   readonly property string freshness: Workspan.staleness(snapshot, nowMs, refreshSeconds)
   readonly property bool online: freshness === "fresh"
@@ -85,44 +79,30 @@ Panel {
   function refreshNow() { statusView.reload() }
 
   // Commands are an argv array: no shell text is interpolated, and the plugin
-  // never writes to the database itself.
+  // never writes to the database itself. The return says whether the command
+  // was dispatched: a refusal leaves the caller's state untouched, so a busy
+  // daemon never reads as a saved note.
   function runCli(args) {
-    if (cliProcess.running) return
+    if (cliProcess.running) return false
     root.lastError = ""
     root.busy = true
     cliProcess.command = [root.cliPath, "--socket", root.socketFile].concat(args)
     cliProcess.running = true
+    return true
   }
 
   function startSession() {
     root.runCli(root.project === "" ? ["session", "start"] : ["session", "start", "--project", root.project])
   }
 
+  // Plain stop: it carries no note. The activity draft lives in SessionControls,
+  // which decides separately whether it rides with a Clock out.
   function stopSession() {
     var value = root.sessionOpen ? String(root.snapshot.current_session.session || "") : ""
-    var args = value === "" ? ["session", "stop"] : ["session", "stop", "--session", value]
-    // Clock out carries the activity: it is written as the session note on the way
-    // out, and cleared once it is recorded so the next session starts blank.
-    var note = root.activity.trim()
-    if (note !== "") args = args.concat(["--note", note])
-    root.activity = ""
-    root.runCli(args)
-  }
-
-  /** Attach the typed activity to the running session without stopping it. */
-  function saveNote() {
-    var note = root.activity.trim()
-    if (note === "") return
-    root.activity = ""
-    root.runCli(["note", note])
+    root.runCli(value === "" ? ["session", "stop"] : ["session", "stop", "--session", value])
   }
 
   function toggleSession() { root.sessionOpen ? root.stopSession() : root.startSession() }
-
-  function pauseOrResume() {
-    if (!root.sessionOpen) return
-    root.runCli(root.sessionPaused ? ["session", "resume"] : ["session", "pause"])
-  }
 
   FileView {
     id: statusView
@@ -210,6 +190,8 @@ Panel {
     onExited: function (code) {
       root.busy = false
       root.lastError = code === 0 ? "" : (Workspan.shortMessage(cliErr.text) || ("workspan exited with " + code))
+      // The draft clears only when the daemon accepted the command that carried it.
+      controls.completeCommand(code === 0)
       root.refreshNow()
     }
   }
@@ -271,6 +253,9 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      // While the controls own keys, the panel's shortcuts stand down: typing
+      // spaces or j/k must reach the editor, not drive the panel.
+      blocked: controls.activeFocus
       onCloseRequested: root.close()
       onActivateRequested: root.refreshNow()
       onTabRequested: function (direction) { root.switchPanel(direction) }
@@ -297,78 +282,33 @@ Panel {
             fontFamily: root.fontFamily
           }
 
-          // The primary action, first in the card. Clocking in and out is what a
-          // person opens this popup to do, so it never sits below the advisory text
-          // or the measures: the label names the act, and the hero above keeps the
-          // ledger vocabulary and the running time.
-          Row {
+          // The controls are the whole action surface, kept first in the card:
+          // the session buttons that were always there, then the manual activity
+          // draft with its own Clock in / Clock out, Save note and Discard draft.
+          SessionControls {
+            id: controls
             width: parent.width
-            spacing: Style.space(8)
-
-            Button {
-              text: root.sessionOpen ? "Clock out" : "Clock in"
-              bordered: true
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              enabled: !root.busy
-              onClicked: root.sessionOpen ? root.stopSession() : root.startSession()
-            }
-
-            Button {
-              visible: root.sessionOpen
-              text: root.sessionPaused ? "Resume" : "Pause"
-              bordered: true
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              enabled: !root.busy
-              onClicked: root.pauseOrResume()
-            }
-
-            // The session controls that were here before stay here: Clock out
-            // carries the activity, Stop is the plain stop.
-            Button {
-              visible: root.sessionOpen
-              text: "Stop"
-              bordered: true
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              enabled: !root.busy
-              onClicked: root.stopSession()
-            }
-
-            Button {
-              visible: root.sessionOpen && root.activity.trim() !== ""
-              text: "Save note"
-              bordered: true
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              enabled: !root.busy
-              onClicked: root.saveNote()
-            }
-
-            Button {
-              text: "Refresh"
-              bordered: true
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onClicked: root.refreshNow()
-            }
+            session: root.sessionOpen ? String(root.snapshot.current_session.session || "") : ""
+            paused: root.sessionPaused
+            project: root.project
+            busy: root.busy
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            dispatch: function(args) { return root.runCli(args) }
+            onRefreshRequested: root.refreshNow()
+            onEscapeRequested: keyCatcher.forceActiveFocus()
           }
 
-          // The activity rides with the clock action: Clock out writes it as the
-          // session note, Save note attaches it to the running session, and Enter
-          // does whichever of the two the current state allows. The 200-character
-          // cap is the daemon's own bound for the note.
-          TextField {
+          // A failed command surfaces beside the actions that caused it, not at
+          // the bottom of a scrolling card.
+          Text {
             width: parent.width
-            placeholderText: "What were you doing? (saved on Clock out)"
-            foreground: root.foreground
+            visible: root.lastError !== ""
+            text: root.lastError
+            color: root.foreground
             font.family: root.fontFamily
-            text: root.activity
-            maximumLength: 200
-            enabled: !root.busy
-            onTextChanged: root.activity = text
-            onAccepted: root.sessionOpen ? root.saveNote() : root.startSession()
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
           }
 
           // The return-from-idle nudge: what the seat saw while nobody typed. It
@@ -574,15 +514,6 @@ Panel {
               }
             }
 
-            Text {
-              visible: root.lastError !== ""
-              text: root.lastError
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              width: parent.width
-              wrapMode: Text.WordWrap
-            }
           }
         }
       }
