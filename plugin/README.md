@@ -85,9 +85,12 @@ scripts/install-plugin.sh --from ~/Downloads/workspan.tracker-0.2.2.zip   # a re
 scripts/install-plugin.sh --verify-only      # compare what is installed with the source
 ```
 
-The script backs up any existing copy, installs the four plugin files, and fails unless
-every installed file matches the source byte for byte - the check that catches a stale
-widget, which looks exactly like a missing feature. The shell reloads plugin code when
+The script installs the four plugin files and fails unless every installed file matches
+the source byte for byte - the check that catches a stale widget, which looks exactly
+like a missing feature. A previous copy is backed up under
+`~/.local/state/workspan/plugin-backups/`, never inside the plugins directory: a backup
+there keeps the same manifest id, and two directories claiming `workspan.tracker` let
+the bar resolve the widget to the stale copy. The shell reloads plugin code when
 a file under that directory changes; force it with `omarchy-shell shell rescanPlugins`.
 
 The plugin holds no durable state of its own: removing it loses nothing but the

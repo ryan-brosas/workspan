@@ -12,6 +12,10 @@
 set -euo pipefail
 
 target="$HOME/.config/omarchy/plugins/workspan.tracker"
+# Backups live outside the directory the shell scans. A copy inside it keeps the same
+# manifest id, and the shell then has two plugins claiming workspan.tracker: the bar
+# widget can resolve to the stale copy, which looks exactly like a missing feature.
+backups="${XDG_STATE_HOME:-$HOME/.local/state}/workspan/plugin-backups"
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_dir="$repo/plugin"
 from=""
@@ -45,7 +49,8 @@ done
 
 if ! $verify_only; then
   if [ -d "$target" ]; then
-    backup="$target.bak.$(date +%s)"
+    mkdir -p "$backups"
+    backup="$backups/$(basename "$target").bak.$(date +%s)"
     cp -a "$target" "$backup"
     echo "install-plugin: backed up the previous widget to $backup"
   fi
