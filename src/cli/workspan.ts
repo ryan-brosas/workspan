@@ -6,13 +6,14 @@
  */
 import { readFileSync } from "node:fs";
 import { socketPath as defaultSocket } from "../daemon/paths.ts";
-import { request as daemonRequest } from "../client.ts";
+import { request as daemonRequest, batchEvidence, readReport } from "../client.ts";
 import type { Method } from "../protocol.ts";
+import type { Status } from "../daemon/measures.ts";
 import type { Binding } from "./pick.ts";
 import { parseMoment } from "./moment.ts";
 
 const args = process.argv.slice(2);
-const FLAGS = new Set(["--socket", "--project", "--root", "--explicit", "--session", "--file", "--db", "--since-days", "--since-hours", "--limit", "--instance", "--turns", "--chunks", "--target", "--map", "--tracker-db", "--at"]);
+const FLAGS = new Set(["--socket", "--project", "--root", "--explicit", "--session", "--file", "--db", "--since-days", "--since-hours", "--limit", "--instance", "--turns", "--chunks", "--target", "--map", "--tracker-db", "--at", "--date", "--tz", "--export", "--keep"]);
 const flags = (name: string): string[] => {
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) if (args[i] === name && args[i + 1] !== undefined) out.push(args[i + 1]);
@@ -51,25 +52,11 @@ async function printUnallocatedRoots(): Promise<void> {
     console.log(`  ${row.measure.padEnd(8)} ${Math.round(row.ms / 60_000)}m  ${row.root}  -> workspan projects confirm ${row.root} <client>`);
   }
 }
-/** The socket frame is capped at 64 KiB; a big import goes in batches that fit. */
-function batchEvents(events: readonly unknown[], maxBytes = 48_000): unknown[][] {
-  const batches: unknown[][] = [];
-  let current: unknown[] = [];
-  let size = 0;
-  for (const event of events) {
-    const bytes = JSON.stringify(event).length + 2;
-    if (current.length > 0 && size + bytes > maxBytes) { batches.push(current); current = []; size = 0; }
-    current.push(event);
-    size += bytes;
-  }
-  if (current.length > 0) batches.push(current);
-  return batches;
-}
 
 /** Import in frame-sized batches; numeric counters merge, so the caller sees one result. */
 async function ingestBatched(events: readonly unknown[]): Promise<Record<string, number>> {
   const totals: Record<string, number> = {};
-  const batches = batchEvents(events);
+  const batches = batchEvidence(events);
   for (const batch of batches) {
     const result = await request("ingest", { events: batch });
     if (result && typeof result === "object") {
@@ -245,9 +232,19 @@ async function main(): Promise<number> {
     if (!result.sessions.length) console.log("no sessions yet");
     return 0;
   }
-  if (group === "day") {
-    const report = await request("day", { ...(flag("--date") ? { date: flag("--date") } : {}), ...(flag("--tz") ? { timezone: flag("--tz") } : {}) }) as { text: string };
-    console.log(report.text);
+  if (group === "day" || group === "week") {
+    const exported = flag("--export");
+    if (args.includes("--export") && exported !== "csv" && exported !== "md") throw new Error("--export must be csv or md");
+    if (exported && args.includes("--json")) throw new Error("choose --json or --export, not both");
+    const format = args.includes("--json") ? "json" : exported ?? "text";
+    const text = await readReport({ period: group, format: format as "text" | "json" | "csv" | "md", ...(flag("--date") ? { date: flag("--date") } : {}), ...(flag("--tz") ? { timezone: flag("--tz") } : {}) }, request);
+    process.stdout.write(text.endsWith("\n") ? text : text + "\n");
+    return 0;
+  }
+  if (group === "backup") {
+    const raw = flag("--keep");
+    if (args.includes("--keep") && (raw === undefined || !/^\d+$/.test(raw))) throw new Error("--keep must be a positive integer");
+    console.log(JSON.stringify(await request("backup", { ...(raw === undefined ? {} : { keep: Number(raw) }) }), null, 2));
     return 0;
   }
   if (group === "audit") {
@@ -305,10 +302,13 @@ async function main(): Promise<number> {
   if (group === "harness") {
     // Which local agent histories exist and how fresh they are - availability
     // first, evidence later. Probing reads a store's metadata, never its records.
-    const { harnessReaders } = await import("../adapters/registry.ts");
-    const now = Date.now();
-    const readers = harnessReaders().map(reader => ({ id: reader.id, source: reader.source, ...reader.probe({ now }) }));
-    console.log(JSON.stringify({ readers }, null, 2));
+    const { probeHarness } = await import("../adapters/registry.ts");
+    const readers = probeHarness({ now: Date.now() });
+    // What the daemon's own periodic pass last did, when it is running: detection
+    // is automatic, and "never scanned" must not look like "nothing found".
+    let automatic: Status["harness"] | null = null;
+    try { automatic = ((await request("status", {})) as Status).harness ?? null; } catch { automatic = null; }
+    console.log(JSON.stringify({ readers, automatic }, null, 2));
     return 0;
   }
   if (group === "ingest-harness") {
@@ -364,8 +364,12 @@ async function main(): Promise<number> {
     const piped = args.includes("--stdin");
     if (!file && !piped) throw new Error("ingest needs --file <jsonl> or --stdin");
     const text = file ? readFileSync(file, "utf8") : readFileSync(0, "utf8");
-    const events = text.split("\n").map(line => line.trim()).filter(Boolean).map(line => JSON.parse(line) as unknown);
-    console.log(JSON.stringify(await request("ingest", { events }), null, 2));
+    let events: unknown[];
+    try { events = text.split("\n").map(line => line.trim()).filter(Boolean).map(line => JSON.parse(line) as unknown); }
+    catch { throw new Error("invalid_jsonl: malformed evidence retained for review"); }
+    const result = await ingestBatched(events);
+    console.log(JSON.stringify(result, null, 2));
+    if (result.conflicts > 0) { console.error("evidence_conflict: conflicting evidence retained for review"); return 1; }
     return 0;
   }
   if (group === "doctor") {
@@ -389,7 +393,7 @@ async function main(): Promise<number> {
     await new Promise<void>(resolve => { process.stdout.write("", () => resolve()); });
     return 0;
   }
-  throw new Error("usage: workspan daemon|status|engine [--check]|health|doctor [--json]|mcp|ingest --file f.jsonl|ingest --stdin|ingest-codex [--since-days N] [--dry-run]|harness|ingest-harness [--id X] [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl [--require-clean]|projects|signals|migrate --chunks f.jsonl --target db [--tracker-db pi.sqlite] [--map scope=project] [--apply]|session start|pause|resume|stop|switch|toggle --project P [--at HH:MM|ISO|ms]|note <text> [--session S | --idle]|day");
+  throw new Error("usage: workspan daemon|status|engine [--check]|health|doctor [--json]|mcp|ingest --file f.jsonl|ingest --stdin|ingest-codex [--since-days N] [--dry-run]|harness|ingest-harness [--id X] [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl [--require-clean]|projects|signals|migrate --chunks f.jsonl --target db [--tracker-db pi.sqlite] [--map scope=project] [--apply]|session start|pause|resume|stop|switch|toggle --project P [--at HH:MM|ISO|ms]|note <text> [--session S | --idle]|day|week [--date YYYY-MM-DD] [--tz ZONE] [--json|--export csv|md]|backup [--keep N]");
 }
 
 main().then(code => process.exit(code)).catch((error: unknown) => {

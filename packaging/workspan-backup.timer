@@ -1,0 +1,12 @@
+# Optional schedule; installation/enablement requires separate approval.
+[Unit]
+Description=Daily Workspan backup request
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=15m
+Persistent=true
+Unit=workspan-backup.service
+
+[Install]
+WantedBy=timers.target

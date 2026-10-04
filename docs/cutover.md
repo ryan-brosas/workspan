@@ -14,12 +14,17 @@ day         tracker work  ws inferred  ws attested  ws agent  inferred - tracker
 2026-10-02  328m          0m           0m           0m        -328m
 ```
 
-Reproduce with `bun scripts/reconcile-tracker.ts --days 7`. The tracker's `work`
+This is a historical rounded observation made before reporting/reconciliation
+repairs; do not use it as an exact gate or assume the current command reproduces
+it. After an approved deployment, remeasure with
+`bun scripts/reconcile-tracker.ts --days 7`. The tracker's `work`
 windows and Workspan's inferred measure are the comparable pair: both are
 interaction-derived windows under the same idle-gap semantics. The script is
 read-only on both sides - the tracker's ledger is opened `readOnly: true`, and the
-Workspan numbers come from the daemon's own day report, because a client must not open
-the accounting database.
+Workspan numbers now come from exact daemon JSON reports; source windows are
+clipped at local calendar boundaries and unioned through Bend. The displayed
+minute labels are rounded only for presentation. A client must not open the
+accounting database.
 
 The gap is expected and now shrinking: Workspan's inferred measure covers only what the
 live adapters have seen (the Pi extension, the opencode plugin and the Claude hook all
@@ -48,11 +53,17 @@ is what judges it.
    `workspan migrate --tracker-db ~/.local/state/pi-time-tracker/tracker.sqlite --chunks <file> --target <db>`
    (it plans first; `--apply` is a separate, explicit step).
 3. The imported range reconciles: for each imported day, the inferred column matches the
-   tracker's work column within rounding and explainable gap differences.
+   tracker's work column in exact clipped milliseconds, with only explainable gap differences.
 4. Only then is the old extension's write path removed, and its ledger kept read-only
    as provenance.
 
 ## Status
+
+Local reporting/export and consistent-backup implementation is complete, but not
+new approval to deploy, enable the optional backup timer, import live history or
+retire the old writer. Binding-change replay, auditable history corrections/undo
+and popup attribution review still block cutover. Back up both ledgers and rehearse
+newly accepted evidence preservation during rollback in an explicit isolated target.
 
 Pending: steps 1 and 2. Step 3 is measured by the script above and step 4 is the
 decision this document exists to gate. The migration imports history into an explicitly

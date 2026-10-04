@@ -34,7 +34,9 @@ before it depends on a newer field.
 | --- | --- | --- | --- |
 | `health` | - | `state`, `schema`, `protocol`, `socket`, `status_file`, `database` | - |
 | `status` | - | the materialized status (see below) | - |
-| `day` | `date?`, `timezone?` | `{ date, timezone, text }` | `bad_request` for an impossible day |
+| `day` | `date?`, `timezone?` | `{ date, timezone, text }` | `bad_request`, `response_too_large` |
+| `report` | `period: day|week`, `date?`, `timezone?`, `format?`; continuation: `token`, `offset` | `{ token, offset, chunk, next }` | `bad_request`, `report_expired`, `report_too_large` |
+| `backup` | `keep?` (1–365; default 7) | `{ path, revision, identities, schemaVersion, removed }` | `bad_request`, `internal` |
 | `projects` | - | `{ bindings: [{ root, project, explicit, source }] }` | - |
 | `projects.bind` | `root`, `project`, `explicit?` | `{ bindings }` | `bad_request` |
 | `ingest` | `events: [...]` | `{ accepted, duplicates, conflicts, receipts, batches? }` | `bad_request`, `too_many_events` |
@@ -51,10 +53,30 @@ before it depends on a newer field.
 `session` values in results are what the caller passes back to the other session
 methods; `key` is the internal identity, for diagnostics only.
 
+`report` formats are `text` (default), `json`, `csv`, `md`. A week contains the date
+and runs Monday–Sunday in the selected IANA timezone. Follow `next` using the same
+token; `null` ends the report. Chunks come from one immutable five-minute snapshot,
+which may also be evicted under a bounded cache. `WorkspanClient.report`/`readReport`
+assemble it; a client never calculates totals. See [reports](reports.md).
+`backup` asks the existing daemon store for a consistent private SQLite snapshot;
+clients never copy/open the live database. See [backup](backup.md).
+
 ## The status object
 
 `schema`, `generated_at`, `idle_gap_ms`, `engine`, `measures`, `current_session`,
-`last_idle`, `uncovered`, `coverage`, `watermark`, `non_additive`.
+`last_idle`, `uncovered`, `coverage`, `watermark`, `non_additive`, and daemon-added
+`delivery: { pending_files, pending_bytes, issues }`. Pending/refused evidence is
+uncertainty, not zero work; source totals must not be assumed complete while it
+remains queued. See [recovery](delivery.md).
+
+Daemon-added `harness: { interval_ms, window_ms, polled_at, took_ms, error, readers }`
+is automatic harness detection. Each reader row is `{ id, source, store, available,
+last_event_at, stale_days, events, accepted, duplicates, conflicts, error }`: the
+store it found, how stale that store is, and what the last pass did with the records
+inside the window. `available: false` means no store was found - unavailable, never
+zero activity - and a reader that failed carries its `error` without hiding the
+others. `interval_ms: 0` means automatic detection is off; `workspan ingest-harness`
+still imports on demand.
 
 The laws the numbers obey are not negotiable in a client:
 
@@ -102,5 +124,5 @@ names a client. Adapters write their evidence to a spool first
 4. Never start or stop a session because an agent ran. Attestation is the person's.
 
 `workspan mcp` exposes the same daemon over MCP stdio as agent-facing tools
-(`work_status`, `work_day`, `work_sessions`, `work_projects`, `work_note`,
+(`work_status`, `work_day`, `work_report`, `work_sessions`, `work_projects`, `work_note`,
 `work_session`); it is a thin proxy with no state of its own.

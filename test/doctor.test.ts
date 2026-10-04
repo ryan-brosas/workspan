@@ -70,5 +70,9 @@ test("doctor tells a quiet seat from a stopped ingest loop, and sees stranded ev
     writeFileSync(join(spoolDir, "pi-spool-9000002.jsonl"), '{"v":1}\n');
     const pending = await runDoctor({ socketPath, runtimeDir, databasePath, spoolDir });
     expect(pending.checks.find(check => check.name === "adapter spools")?.state).toBe("attention");
+    writeFileSync(join(spoolDir, "pi-spool-9000003.jsonl.loss"), JSON.stringify({ code: "evidence_spool_full", at: Date.now() }));
+    const refused = await runDoctor({ socketPath, runtimeDir, databasePath, spoolDir });
+    expect(refused.checks.find(check => check.name === "evidence delivery")?.state).toBe("attention");
+    expect(refused.checks.find(check => check.name === "evidence delivery")?.detail).toContain("evidence_spool_full");
   } finally { await daemon.close(); }
 });
