@@ -1,7 +1,8 @@
 /**
  * `workspan mcp`: the agent-facing tool surface, spoken over stdio.
  *
- * It is a thin proxy, one daemon request per tool call, so the daemon stays the only
+ * It is a thin proxy: each tool call becomes one or more daemon requests (a paged
+ * `work_report` follows the snapshot page by page), so the daemon stays the only
  * writer and Bend stays the only accounting authority. The read tools are side-effect
  * free; the mutating tools exist for the case where a person asked for them in the
  * conversation - nothing here starts a session because an agent happened to run, and
@@ -32,7 +33,12 @@ const TOOLS: Tool[] = [
   {
     name: "work_report",
     description: "Read one immutable day or Monday-Sunday week report. Exact separate measures, provenance, provisional sessions and coverage; never a billing total.",
-    inputSchema: object({ period: { type: "string", enum: ["day", "week"] }, date: { type: "string" }, timezone: { type: "string" }, format: { type: "string", enum: ["text", "json", "csv", "md"] } }, ["period"]),
+    inputSchema: object({
+      period: { type: "string", enum: ["day", "week"] },
+      date: { type: "string", description: "Local day as YYYY-MM-DD; omit for today. For a week, any day inside that Monday-Sunday week" },
+      timezone: { type: "string", description: "IANA zone; omit for the daemon host's zone" },
+      format: { type: "string", enum: ["text", "json", "csv", "md"], description: "Report output format; defaults to json" },
+    }, ["period"]),
   },
   {
     name: "work_sessions",
@@ -93,9 +99,13 @@ export function createMcpServer(request: Requester): { handle(message: unknown):
         return text(report.text ?? report);
       }
       case "work_report": {
-        if (args.period !== "day" && args.period !== "week") return toolError("work_report needs day or week");
+        if (args.period !== "day" && args.period !== "week") return toolError(`work_report needs day or week; got ${JSON.stringify(args.period)}`);
         const format = args.format ?? "json";
-        if (format !== "text" && format !== "json" && format !== "csv" && format !== "md") return toolError("invalid report format");
+        if (format !== "text" && format !== "json" && format !== "csv" && format !== "md") return toolError(`invalid report format ${JSON.stringify(args.format)}; expected text, json, csv, or md`);
+        // A present-but-wrong value is an error the caller can fix, never silently
+        // dropped: a discarded argument would report the default period as success.
+        if (args.date !== undefined && typeof args.date !== "string") return toolError(`work_report date must be a string; got ${JSON.stringify(args.date)}`);
+        if (args.timezone !== undefined && typeof args.timezone !== "string") return toolError(`work_report timezone must be a string; got ${JSON.stringify(args.timezone)}`);
         return text(await readReport({ period: args.period, format, ...(typeof args.date === "string" ? { date: args.date } : {}), ...(typeof args.timezone === "string" ? { timezone: args.timezone } : {}) }, request));
       }
       case "work_sessions": return text(await request("session.list"));

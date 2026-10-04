@@ -119,6 +119,12 @@ function unallocatedByRoot(intervals: readonly Attributed[]): Array<{ root: stri
     .sort((a, b) => b.ms - a.ms || a.root.localeCompare(b.root));
 }
 
+/**
+ * One measure's projection over its own intervals: the union, the per-project
+ * partition, and the unallocated and ambiguous remainders. Exported because the
+ * report, the migration reconciler and the status view must count the same evidence
+ * the same way - and never as one half of a sum: measures are never added together.
+ */
 export function measure(intervals: readonly Attributed[]): MeasureStatus {
   const part = partitionByProject(intervals);
   const union = intervals.length === 0 ? 0 : reconcileIntervals([intervals.map(({ start, end }) => ({ start, end }))])[0];
@@ -144,7 +150,11 @@ export interface HarnessReaderStatus {
   last_event_at: number | null;
   /** Whole days since that moment: "stale, not empty" in one number. */
   stale_days: number | null;
-  /** Evidence the reader returned, and what ingest did with it. */
+  /**
+   * Evidence the reader returned, and what ingest did with it. Every returned record
+   * has a disposition: accepted + duplicates + conflicts equals `events`, unless
+   * `error` names a failure part-way through the pass, where the remainder is stated.
+   */
   events: number;
   accepted: number;
   duplicates: number;
@@ -164,15 +174,30 @@ export interface HarnessStatus {
   window_ms: number;
   /** The last completed pass, or null: a daemon that just started has not scanned. */
   polled_at: number | null;
+  /**
+   * How long that pass took in milliseconds: null exactly when `polled_at` is null,
+   * and set even for a pass that recorded `error`, because the attempt is a fact.
+   */
   took_ms: number | null;
   /** A pass that failed before any reader reported is stated, not smoothed over. */
   error: string | null;
+  /** Every reader this pass probed, in registry order; a failed one is named, not dropped. */
   readers: HarnessReaderStatus[];
+}
+
+/** Durable-delivery health: counts, plus the code of the last drain failure. */
+export interface DeliveryStatus {
+  pending_files: number;
+  pending_bytes: number;
+  /** Spool markers on disk: evidence that could not be delivered and needs review. */
+  issues: number;
+  /** The last drain failure, or null; a queue that never shrinks stays diagnosable. */
+  error: string | null;
 }
 
 export interface Status {
   /** Transport health only, never attendance or another measure. */
-  delivery?: { pending_files: number; pending_bytes: number; issues: number };
+  delivery?: DeliveryStatus;
   /** Automatic harness detection: store metadata and import counts, never work. */
   harness?: HarnessStatus;
   schema: 1;
@@ -310,7 +335,12 @@ export interface Projection {
   /** The latest stretch only: closed duration is evidence, an open one is drawn live. */
   lastIdle: IdleStretch | null;
   /** Every interval the measures were built from, kept so a review view needs no rebuild. */
-  intervals: { attested: Attributed[]; inferred: Attributed[]; agent: Attributed[] };
+  /**
+   * Every interval the measures were built from, kept so a review view needs no
+   * rebuild. Read-only: this is the cached instance consumers share, and sorting it
+   * in place would corrupt the projection for every later reader.
+   */
+  intervals: { attested: readonly Attributed[]; inferred: readonly Attributed[]; agent: readonly Attributed[] };
   observations: number;
   conflicts: number;
 }
@@ -476,7 +506,7 @@ function computeProjection(store: WorkspanStore, options: { idleGapMs: number })
  * The day's uncovered stretches, computed from the cached intervals: cheap enough to
  * run on every status write, and never cached, so midnight cannot make it stale.
  */
-function uncoveredForDay(intervals: { attested: Attributed[]; inferred: Attributed[]; agent: Attributed[] }, day?: { start: number; end: number }): Status["uncovered"] {
+function uncoveredForDay(intervals: Record<MeasureName, readonly Attributed[]>, day?: { start: number; end: number }): Status["uncovered"] {
   if (!day) return { today_ms: 0, stretches: [] };
   const all = [...intervals.attested, ...intervals.inferred, ...intervals.agent].map(({ start, end }) => ({ start, end }));
   const span = observedSpan(all, day);
@@ -499,9 +529,11 @@ export function getProjection(store: WorkspanStore, options: { idleGapMs: number
   return projection;
 }
 
-export function buildStatus(store: WorkspanStore, options: { idleGapMs: number; now?: number; engine?: EngineInfo; cache?: StatusCache; day?: { start: number; end: number } }): Status {
-  const now = options.now ?? Date.now();
+export function buildStatus(store: WorkspanStore, options: { idleGapMs: number; now?: number; engine?: EngineInfo; cache?: StatusCache; day?: { start: number; end: number }; delivery?: DeliveryStatus; harness?: HarnessStatus }): Status {
+  // The projection comes first: a cache miss runs the whole policy union, so reading
+  // the clock before it would date every live field before the work it follows.
   const projection = getProjection(store, options);
+  const now = options.now ?? Date.now();
   return {
     schema: 1,
     generated_at: now,
@@ -526,6 +558,10 @@ export function buildStatus(store: WorkspanStore, options: { idleGapMs: number; 
     },
     watermark: { observations: projection.observations, conflicts: projection.conflicts },
     non_additive: NON_ADDITIVE_NOTE,
+    // One owner for status assembly: a snapshot the caller supplies is part of the
+    // returned object, never something every caller must remember to attach.
+    ...(options.delivery ? { delivery: options.delivery } : {}),
+    ...(options.harness ? { harness: options.harness } : {}),
   };
 }
 

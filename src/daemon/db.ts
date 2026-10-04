@@ -6,6 +6,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { constants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, closeSync, unlinkSync } from "node:fs";
 import { dirname } from "node:path";
+import { syncDirectory } from "../spool.ts";
 import { randomUUID } from "node:crypto";
 import type { ClockWindow, WindowPort } from "../core/clock.ts";
 import { eventId, fingerprint, type EvidenceEvent, type Kind, type Origin } from "./evidence.ts";
@@ -307,8 +308,13 @@ export class WorkspanStore implements WindowPort {
     try {
       this.db.prepare("vacuum into ?").run(path);
       fsyncSync(fd);
+      // Contents durable is not enough: the new directory entry is not until the
+      // parent directory is synced, and a snapshot lost after a reported success
+      // would defeat the guarantee this method exists to give.
+      syncDirectory(path);
     } catch (error) {
-      unlinkSync(path);
+      // A failed cleanup must never replace the cause the caller needs to see.
+      try { unlinkSync(path); } catch { /* the original error is the one that matters */ }
       throw error;
     } finally { closeSync(fd); }
   }

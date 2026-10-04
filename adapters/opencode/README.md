@@ -7,7 +7,7 @@ than a stream of tool calls. A chat message is presence of **unknown** origin: a
 queued or scripted prompt looks the same as a typed one.
 
 No prompt text, tool arguments or model output leave the process - only the event
-name, the session id and the working directory, through `src/client.ts` and the spool
+name, the session id and the working directory, through `src/spool.ts` and the spool
 it owns.
 
 ## Install

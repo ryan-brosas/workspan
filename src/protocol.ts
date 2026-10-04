@@ -11,8 +11,34 @@ export const MAX_FRAME_BYTES = 64 * 1024;
 export const METHODS = ["health", "ingest", "status", "engine", "projects", "projects.bind", "session.start", "session.pause", "session.resume", "session.stop", "session.note", "session.switch", "session.toggle", "session.remove", "session.list", "day", "report", "backup"] as const;
 export type Method = typeof METHODS[number];
 
-export interface ReportQuery { period: "day" | "week"; date?: string; timezone?: string; format?: "text" | "json" | "csv" | "md" }
+/** A day or Monday-Sunday week report; the numbers in it are always the stored measures. */
+export interface ReportQuery {
+  period: "day" | "week";
+  /**
+   * Local calendar date, `YYYY-MM-DD`, read in `timezone`. Defaults to the daemon's
+   * local today. For a week, any day inside the target week: the plan covers that
+   * week's Monday through Sunday.
+   */
+  date?: string;
+  /** IANA zone identifier, e.g. `Europe/Lisbon`; defaults to the daemon host's zone. */
+  timezone?: string;
+  /** Output format; `text` when omitted, except the MCP `work_report` tool, which defaults to `json`. */
+  format?: "text" | "json" | "csv" | "md";
+}
+/** One immutable snapshot is fetched in pages: send the last page's `token` and `next` back. */
+export interface ReportContinuation { token: string; offset: number }
+/**
+ * One page of a report snapshot. `offset`, `next` and the snapshot size limit are all
+ * measured in UTF-16 code units -- the unit of `chunk` and of every `String` offset; a
+ * non-ASCII report is therefore larger in bytes than its offset suggests. `chunk` never
+ * ends inside a surrogate pair, `next` is `offset + chunk.length` or null on the last
+ * page, and the snapshot (and its token) expires five minutes after the last request
+ * that used it, after which the client restarts the query as `report_expired`.
+ */
 export interface ReportPage { token: string; offset: number; next: number | null; chunk: string }
+/** A consistent snapshot of the ledger; `keep` is how many snapshots to retain. */
+export interface BackupQuery { keep?: number }
+export type { BackupResult } from "./daemon/backup.ts";
 
 export interface Request { v: number; id: string; method: Method; params?: unknown }
 export interface ErrorBody { code: string; message: string }

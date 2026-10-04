@@ -7,7 +7,7 @@
  * as a stream of tool calls, and it never claims human attendance: a queued or
  * scripted prompt is not a person.
  *
- * The transport and the spool live in `src/client.ts`, shared with the CLI, MCP and
+ * The transport and the spool live in `src/spool.ts`, shared with the CLI, MCP and
  * the other adapters, so this plugin cannot drift from docs/protocol.md.
  */
 import { drainAdapterSpools, evidenceFor, spoolFor, type Observation } from "../evidence.ts";

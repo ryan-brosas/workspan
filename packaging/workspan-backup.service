@@ -1,5 +1,10 @@
 # Optional client-only backup request; NOT installed or enabled by the repository.
 # Requires the daemon/CLI backup wiring. See docs/backup.md before enabling.
+#
+# A USER unit, like the daemon it depends on: install it beside workspan.service in
+# ~/.config/systemd/user/ and manage it with `systemctl --user`. Installed as a
+# system unit it would resolve %h to /root, %t to /run and Requires= against the
+# system manager, and would look for a daemon that is not there.
 [Unit]
 Description=Workspan consistent local backup
 Requires=workspan.service
@@ -9,6 +14,13 @@ After=workspan.service
 Type=oneshot
 Environment=WORKSPAN_RUNTIME_DIR=%t/workspan
 Environment=WORKSPAN_BACKUP_KEEP=7
+# A consistent snapshot of a large store can outlast the 90 s default start timeout,
+# which would SIGTERM the backup and record a failure for work that was nearly done.
+TimeoutStartSec=30min
+# The daemon is Type=exec, so After= orders the start job without waiting for the
+# socket. Wait for it here, so the first timer tick after login cannot fail on a
+# socket that is still being created.
+ExecStartPre=/usr/bin/env bash -c 'for _ in $(seq 1 60); do [ -S "$WORKSPAN_RUNTIME_DIR/workspan.sock" ] && exit 0; sleep 1; done; echo "workspan socket did not appear in $WORKSPAN_RUNTIME_DIR" >&2; exit 1'
 ExecStart=%h/.local/bin/workspan backup --keep ${WORKSPAN_BACKUP_KEEP}
 UMask=0077
 NoNewPrivileges=true

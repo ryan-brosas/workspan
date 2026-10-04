@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EvidenceSpool, drainOrphanedSpools, listSpools } from "../src/client.ts";
+import { EvidenceSpool, drainOrphanedSpools, listSpools } from "../src/spool.ts";
 
 /** A pid above pid_max: the kernel answers ESRCH, so "the writer is gone" is deterministic. */
 const deadPid = (offset: number): number => 9_000_000 + offset;
@@ -40,7 +40,11 @@ test("the inventory uses the shared naming, and orphan spools are cleaned or kep
     expect(await drainOrphanedSpools({ directory: dir, socketPath: join(dir, "nothing.sock") })).toBe(0);
     expect(existsSync(join(dir, `claude-spool-${deadPid(1)}.jsonl`))).toBe(false);
     expect(existsSync(join(dir, `opencode-spool-${deadPid(2)}.jsonl`))).toBe(false);
+    // Moved, not copied: the original name is gone, and the evidence is still
+    // discoverable for the next attempt.
+    expect(existsSync(join(dir, `pi-spool-${deadPid(3)}.jsonl`))).toBe(false);
     expect(existsSync(join(dir, `pi-spool-${deadPid(3)}.jsonl.pending`))).toBe(true);
+    expect(listSpools({ directory: dir }).some(file => file.name.endsWith(".jsonl.pending"))).toBe(true);
     expect(existsSync(join(dir, "notes.txt"))).toBe(true);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

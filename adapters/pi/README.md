@@ -20,7 +20,7 @@ bindings**, because an adapter that named a client would be guessing it.
 
 Events are appended to a private spool (`~/.local/state/workspan/pi-spool-<pid>.jsonl`,
 0600 in a 0700 directory) and then delivered over the daemon socket. The transport and
-the spool rules live in `src/client.ts`, shared with the CLI and `workspan mcp`, so
+the spool rules live in `src/spool.ts`, shared with the CLI and `workspan mcp`, so
 this adapter cannot drift from `docs/protocol.md`. Delivery is at-least-once and the
 daemon dedupes by identity, so replay is safe; if the daemon is down, the spool holds
 the evidence and drains on the next emit or on the next session start. A spool left by

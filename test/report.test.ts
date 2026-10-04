@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { WorkspanStore } from "../src/daemon/db.ts";
-import { startDaemon } from "../src/daemon/server.ts";
+import { startDaemon, type Daemon } from "../src/daemon/server.ts";
 import { buildReport, formatReport, reportRows, type ReportFacts } from "../src/daemon/report.ts";
 import { readReport, WorkspanClient } from "../src/client.ts";
 import { createMcpServer } from "../src/mcp.ts";
@@ -70,21 +70,30 @@ test("reconciliation clips crossing windows and retains millisecond precision", 
 
 test("large report pages stay on one watermark across ledger changes; CLI and MCP use them", async () => {
   const { dir, store } = fixture();
-  for (let i = 0; i < 140; i++) {
-    store.ingest(manual("session-start", t + i * 60_000, `s-${i}`), t);
-    store.ingest(manual("session-stop", t + i * 60_000 + 1000, `s-${i}`), t);
-    store.addSessionNote(store.sessionRows().at(-1)!.id, "user-authored ".repeat(12), t);
-  }
-  const daemon = await startDaemon({ store, runtimeDir: join(dir, "run"), now: () => t + 10_000_000 });
+  // Setup lives inside the try so a failure here still closes the store and removes
+  // the temp directory instead of leaking both.
+  let daemon: Daemon | null = null;
   try {
+    for (let i = 0; i < 140; i++) {
+      store.ingest(manual("session-start", t + i * 60_000, `s-${i}`), t);
+      store.ingest(manual("session-stop", t + i * 60_000 + 1000, `s-${i}`), t);
+      // Look the row up by identity: the note must not depend on row ordering.
+      const session = store.sessionRows().find(row => row.session === `s-${i}`);
+      if (!session) throw new Error(`no session row for s-${i}`);
+      store.addSessionNote(session.id, "user-authored ".repeat(12), t);
+    }
+    daemon = await startDaemon({ store, runtimeDir: join(dir, "run"), now: () => t + 10_000_000 });
     const client = new WorkspanClient({ socketPath: daemon.socketPath });
     const query = { period: "day" as const, date: "2026-10-03", timezone: "UTC", format: "json" as const };
     const first = await client.request("report", query) as ReportPage;
     expect(first.next).not.toBeNull();
     const revision = store.revision();
     await client.bind("/later", "later");
-    let text = first.chunk, page = first;
+    let text = first.chunk, page = first, pages = 0;
     while (page.next !== null) {
+      // A cursor that never terminates must fail here with a clear message, not spin
+      // until the runner timeout.
+      if (++pages > 100) throw new Error(`report pagination did not terminate after ${pages} pages`);
       page = await client.request("report", { token: first.token, offset: page.next }) as ReportPage;
       expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(64_000);
       text += page.chunk;
@@ -105,17 +114,20 @@ test("large report pages stay on one watermark across ledger changes; CLI and MC
     await expect(client.request("report", { token: first.token, offset: -1 })).rejects.toThrow("bad_request");
     await expect(client.request("report", { token: "missing", offset: 0 })).rejects.toThrow("report_expired");
     expect(await readReport(query, (method, params) => client.request(method, params))).toContain('"schema": 1');
-  } finally { await daemon.close(); rmSync(dir, { recursive: true, force: true }); }
+  } finally { if (daemon) await daemon.close(); store.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("backup CLI requests the daemon snapshot and leaves later accepted evidence intact", async () => {
   const { dir, store } = fixture();
-  store.ingest(manual("session-start", t), t);
-  store.ingest(manual("session-stop", t + 1234), t);
-  const daemon = await startDaemon({ store, runtimeDir: join(dir, "run"), now: () => t + 3000 });
+  let daemon: Daemon | null = null;
   try {
+    store.ingest(manual("session-start", t), t);
+    store.ingest(manual("session-stop", t + 1234), t);
+    // A local binding, so the closure below cannot see a null daemon.
+    const live = await startDaemon({ store, runtimeDir: join(dir, "run"), now: () => t + 3000 });
+    daemon = live;
     const cli = async (...args: string[]) => {
-      const proc = Bun.spawn([process.execPath, join(import.meta.dir, "../src/cli/workspan.ts"), "--socket", daemon.socketPath, ...args], { stdout: "pipe", stderr: "pipe" });
+      const proc = Bun.spawn([process.execPath, join(import.meta.dir, "../src/cli/workspan.ts"), "--socket", live.socketPath, ...args], { stdout: "pipe", stderr: "pipe" });
       const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
       return { code: await proc.exited, stdout, stderr };
     };
@@ -123,14 +135,13 @@ test("backup CLI requests the daemon snapshot and leaves later accepted evidence
     expect(result.code).toBe(0); expect(result.stderr).toBe("");
     const backup = JSON.parse(result.stdout) as { path: string; identities: number; revision: number };
     expect(backup.identities).toBe(2); expect(backup.revision).toBe(store.revision());
-    const { copyFileSync } = await import("node:fs");
     const target = join(dir, "restored.sqlite"); copyFileSync(backup.path, target);
     const restored = new WorkspanStore(target);
     try { expect(buildReport(restored, { date: "2026-10-03", timezone: "UTC" }).measures.attested.union_ms).toBe(1234); }
     finally { restored.close(); }
-    const client = new WorkspanClient({ socketPath: daemon.socketPath });
+    const client = new WorkspanClient({ socketPath: live.socketPath });
     await client.ingest([{ v: 1, source: "desktop", instance: "fixture", session: "s", event: "later", kind: "interaction", at: t + 2000, origin: "unknown" }]);
     expect(store.observations()).toHaveLength(3);
     const bad = await cli("backup", "--keep", "0"); expect(bad.code).not.toBe(0);
-  } finally { await daemon.close(); rmSync(dir, { recursive: true, force: true }); }
+  } finally { if (daemon) await daemon.close(); store.close(); rmSync(dir, { recursive: true, force: true }); }
 });

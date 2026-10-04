@@ -2,7 +2,9 @@ import { afterAll, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EvidenceSpool, WorkspanClient, drainOrphanedSpools } from "../src/client.ts";
+import { WorkspanClient } from "../src/client.ts";
+import { EvidenceSpool, drainOrphanedSpools, spoolProblems } from "../src/spool.ts";
+
 import { WorkspanStore } from "../src/daemon/db.ts";
 import { startDaemon, type Daemon } from "../src/daemon/server.ts";
 
@@ -54,8 +56,10 @@ test("an undeliverable spool is kept, and a full one refuses loudly once", async
   expect(down.pendingBytes).toBeGreaterThan(0);
 
   const notices: string[] = [];
-  const tiny = new EvidenceSpool({ spoolPath: join(root, "tiny.jsonl"), socketPath, maxBytes: Buffer.byteLength(JSON.stringify(event("d", 1)) + "\n"), onFull: message => notices.push(message) });
-  expect(tiny.append(event("d", 1))).toBe(true);
+  // One record for both the capacity computation and the append, so the two cannot drift.
+  const record = event("d", 1);
+  const tiny = new EvidenceSpool({ spoolPath: join(root, "tiny.jsonl"), socketPath, maxBytes: Buffer.byteLength(JSON.stringify(record) + "\n"), onFull: message => notices.push(message) });
+  expect(tiny.append(record)).toBe(true);
   expect(tiny.append(event("e", 2))).toBe(false);
   expect(tiny.append(event("f", 3))).toBe(false);
   expect(notices.length).toBe(1);
@@ -75,4 +79,45 @@ test("evidence stranded by a dead process is drained, and a live process's spool
   writeFileSync(mine, JSON.stringify(event("mine", 1_700_000_004_000)) + "\n");
   expect(await drainOrphanedSpools({ socketPath, directory, prefix: "pi-spool-" })).toBe(0);
   expect(readFileSync(mine, "utf8")).toContain("mine");
+});
+
+test("a batch stays inside the frame limit, and a record no batch can carry is refused alone", async () => {
+  const { batchEvidence, eventFitsBatch, MAX_BATCH_EVENTS } = await import("../src/spool.ts");
+  const { encodeFrame, MAX_FRAME_BYTES } = await import("../src/protocol.ts");
+  // The widest record the evidence schema allows: every field at its 128-character bound.
+  const widest = { v: 1, source: "desktop", instance: "i".repeat(128), session: "s".repeat(128), event: "e".repeat(128), kind: "interaction", at: 1_700_000_000_000, origin: "unknown", project: "p".repeat(128), root: "/" + "r".repeat(127) };
+  expect(eventFitsBatch(widest)).toBe(true);
+  const events = Array.from({ length: 250 }, (_, index) => ({ ...widest, event: `e-${index}` }));
+  const batches = batchEvidence(events);
+  expect(batches.flat()).toHaveLength(250);
+  for (const batch of batches) {
+    expect(batch.length).toBeLessThanOrEqual(MAX_BATCH_EVENTS);
+    // The promise the batch budget makes: a batch this builder produced never trips the frame guard.
+    expect(Buffer.byteLength(encodeFrame({ v: 1, id: `c-${"0".repeat(36)}`, method: "ingest", params: { events: batch } }))).toBeLessThan(MAX_FRAME_BYTES);
+  }
+  expect(eventFitsBatch({ ...widest, project: "x".repeat(30_000) })).toBe(false);
+});
+
+test("a permanent refusal keeps its own code, and an ambiguous family is marked instead of stranded", async () => {
+  await ensureDaemon();
+  const directory = join(root, "markers");
+  mkdirSync(directory, { recursive: true });
+
+  // A malformed record is retained, and the marker names the permanent state rather
+  // than the transient delivery failure the retry loop used to report for it.
+  const refused = new EvidenceSpool({ spoolPath: join(directory, `claude-spool-${process.pid}.jsonl`), socketPath });
+  writeFileSync(refused.path, "not json\n");
+  await expect(refused.flush()).rejects.toThrow("spool_invalid");
+  expect(spoolProblems(directory).some(problem => problem.code === "spool_invalid")).toBe(true);
+  refused.dispose();
+
+  // More snapshots than one writer can own cannot self-resolve: the family is retained
+  // and reported, so its evidence is never silently stuck.
+  const family = join(directory, "pi-spool-999999.jsonl");
+  writeFileSync(family, JSON.stringify(event("stranded", 1)) + "\n");
+  writeFileSync(family + ".pending", "");
+  writeFileSync(join(directory, "pi-spool-999999-recovery-owner-4242-018f0000-0000-7000-8000-000000000000.jsonl"), JSON.stringify(event("stranded-two", 2)) + "\n");
+  expect(await drainOrphanedSpools({ socketPath, directory, prefix: "pi-spool-" })).toBe(0);
+  expect(existsSync(family)).toBe(true);
+  expect(spoolProblems(directory).some(problem => problem.code === "spool_needs_review")).toBe(true);
 });

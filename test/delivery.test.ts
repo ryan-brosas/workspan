@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:net";
-import { EvidenceSpool, drainOrphanedSpools } from "../src/client.ts";
+import { EvidenceSpool, drainOrphanedSpools, spoolProblems } from "../src/spool.ts";
 import { runDoctor } from "../src/cli/doctor.ts";
 import { WorkspanStore } from "../src/daemon/db.ts";
 import { startDaemon } from "../src/daemon/server.ts";
@@ -16,12 +16,20 @@ test("an append during acknowledgement is retained, and concurrent flushes share
   const ready = new Promise<void>(resolve => { received = resolve; });
   let ack!: () => void;
   const sent: unknown[] = [];
-  const server = createServer(socket => socket.once("data", chunk => {
-    const req = JSON.parse(chunk.toString());
-    sent.push(...req.params.events);
-    ack = () => socket.end(JSON.stringify({ id: req.id, ok: true, result: { accepted: req.params.events.length, duplicates: 0, conflicts: 0 } }) + "\n");
-    received();
-  }));
+  // Read to the frame delimiter instead of assuming one chunk: a split request would
+  // otherwise hang the test until the runner times out.
+  const server = createServer(socket => {
+    let buffer = "";
+    socket.on("data", chunk => {
+      buffer += chunk.toString();
+      const index = buffer.indexOf("\n");
+      if (index === -1) return;
+      const req = JSON.parse(buffer.slice(0, index));
+      sent.push(...req.params.events);
+      ack = () => socket.end(JSON.stringify({ id: req.id, ok: true, result: { accepted: req.params.events.length, duplicates: 0, conflicts: 0 } }) + "\n");
+      received();
+    });
+  });
   const socketPath = join(dir, "socket");
   await new Promise<void>(resolve => server.listen(socketPath, resolve));
   const spool = new EvidenceSpool({ spoolPath: join(dir, "pi-spool-4242.jsonl"), socketPath });
@@ -90,7 +98,7 @@ test("a killed producer leaves a recoverable snapshot after the daemon committed
     accepted(); // Deliberately do not acknowledge.
   }));
   await new Promise<void>(resolve => server.listen(socketPath, resolve));
-  const code = `import { EvidenceSpool } from ${JSON.stringify(join(import.meta.dir, "../src/client.ts"))}; const spool = new EvidenceSpool({spoolPath: ${JSON.stringify(dir)} + '/pi-spool-' + process.pid + '.jsonl', socketPath:${JSON.stringify(socketPath)}}); spool.append(${JSON.stringify(event(7))}); await spool.flush();`;
+  const code = `import { EvidenceSpool } from ${JSON.stringify(join(import.meta.dir, "../src/spool.ts"))}; const spool = new EvidenceSpool({spoolPath: ${JSON.stringify(dir)} + '/pi-spool-' + process.pid + '.jsonl', socketPath:${JSON.stringify(socketPath)}}); spool.append(${JSON.stringify(event(7))}); await spool.flush();`;
   const child = Bun.spawn([process.execPath, "--eval", code], { stdout: "ignore", stderr: "ignore" });
   try {
     await committed;
@@ -105,7 +113,6 @@ test("a killed producer leaves a recoverable snapshot after the daemon committed
 });
 
 test("write/refusal health contains only coarse metadata and malformed evidence remains recoverable", async () => {
-  const { spoolProblems } = await import("../src/client.ts");
   const dir = mkdtempSync(join(tmpdir(), "ws-refusal-"));
   const store = new WorkspanStore(join(dir, "db.sqlite"));
   const daemon = await startDaemon({ store, runtimeDir: join(dir, "run") });
