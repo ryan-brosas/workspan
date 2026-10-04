@@ -6,7 +6,7 @@ import vm from "node:vm"
 // explicit export list so the same source is testable without QML.
 const source = fs.readFileSync(new URL("../Workspan.js", import.meta.url), "utf8")
   .replace(/^\.pragma library\s*/, "")
-  + "\nmodule.exports = { NON_ADDITIVE, expandPath, parseStatus, measure, formatDuration, formatClock, verticalClock, barLabel, barLabelVertical, ageSeconds, staleness, isOffline, displayRows, measureCaveats, companyRows, dotHint, idleHint, warnings, sessionLine, tooltip, shortMessage, engineLine }\n"
+  + "\nmodule.exports = { NON_ADDITIVE, expandPath, parseStatus, measure, formatDuration, formatClock, verticalClock, barLabel, barLabelVertical, ageSeconds, staleness, isOffline, displayRows, measureCaveats, companyRows, dotHint, idleHint, uncoveredHint, warnings, sessionLine, tooltip, shortMessage, engineLine }\n"
 const sandbox = { module: { exports: {} }, isFinite, Number, Math, JSON, String, Array, Object }
 vm.runInNewContext(source, sandbox, { filename: "Workspan.js" })
 const W = sandbox.module.exports
@@ -94,6 +94,13 @@ assert.equal(W.idleHint({ ...status, last_idle: { from: NOW - 30 * 60_000, to: N
 assert.equal(W.idleHint({ ...status, last_idle: { from: NOW, to: NOW - 60_000 } }, NOW), "")
 assert.equal(W.idleHint(status, NOW), "")
 assert.equal(W.idleHint(null, NOW), "")
+
+// The uncovered review list: only a real stretch of the day, and only when long enough.
+assert.equal(W.uncoveredHint({ ...status, uncovered: { today_ms: 2 * HOUR + 25 * 60_000, stretches: [] } }), "2h 25m today has no evidence \u2014 attest it in workspan day")
+assert.equal(W.uncoveredHint({ ...status, uncovered: { today_ms: 10 * 60_000, stretches: [] } }), "")
+assert.equal(W.uncoveredHint({ ...status, uncovered: { today_ms: 0, stretches: [] } }), "")
+assert.equal(W.uncoveredHint(status), "")
+assert.equal(W.uncoveredHint(null), "")
 
 assert.match(W.tooltip(running, NOW, 30), /coral - 1h 05m provisional \(running\)/)
 assert.match(W.tooltip(pausedOpen, NOW, 30), /coral - 2m provisional \(paused\)/)

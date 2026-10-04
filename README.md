@@ -65,7 +65,15 @@ never automatically. On the desktop, the Omarchy bar widget shows the running cl
 start/stop, the company picker and the current measures; one caption nudges when
 the ChatGPT Dot profile was recently active and nothing is being tracked, and another
 reports a finished stretch with no seat input. The idle caption pauses nothing: the
-collector annotates, and only you decide whether that stretch was a break.
+collector annotates, and only you decide whether that stretch was a break. A third
+caption names the time no measure covers ("today has no evidence"), which is the
+review list for gaps you can attest afterwards.
+
+Harnesses integrate through one contract, not five: `docs/protocol.md` and
+`src/client.ts` own the transport, and the adapters only decide what an observation
+means. `workspan doctor` answers whether the daemon, the status file, the collector
+unit, its spool and every evidence source are actually wired, and `workspan mcp`
+exposes the same daemon to an agent as read-mostly tools.
 Attribution derives from the focused workspace (Herdr's focused pane, then the
 window's process tree) and resolves client names only from explicit bindings —
 a confirmation line on stderr says what a session was attributed to.
@@ -79,7 +87,7 @@ workspan ingest-harness --since-days 7  # import agent runtime from local histor
 
 | Reader | Source |
 | --- | --- |
-| Pi | live extension: presence ticks and turn timing |
+| Pi | live adapter, installed in shadow mode: presence ticks, turn timing, settle boundaries |
 | Codex | `~/.codex/thread_history_*.sqlite` turn timing |
 | opencode | `opencode.db` message blocks per session |
 | Claude Code | `~/.claude/projects/**/*.jsonl` turns |

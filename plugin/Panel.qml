@@ -50,6 +50,8 @@ Panel {
   readonly property string dotHint: Workspan.dotHint(root.dotPresence, root.snapshot, root.nowMs)
   /** The seat-idle nudge: an annotation that pauses nothing, so it only reports. */
   readonly property string idleHint: Workspan.idleHint(root.snapshot, root.nowMs)
+  /** What the day report cannot speak for: a review list, never a subtraction. */
+  readonly property string uncoveredHint: Workspan.uncoveredHint(root.snapshot)
   readonly property string barText: root.vertical ? Workspan.barLabelVertical(root.snapshot) : Workspan.barLabel(root.snapshot)
   /** One entry per stacked line, the way the stock clock splits its vertical format. */
   readonly property var verticalLines: root.vertical ? root.barText.split("\n") : []
@@ -281,6 +283,18 @@ Panel {
             width: parent.width
             text: root.idleHint
             visible: root.idleHint !== ""
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+          }
+
+          // What the day report cannot account for. The person decides what it was;
+          // nothing here was removed from any total.
+          Text {
+            width: parent.width
+            text: root.uncoveredHint
+            visible: root.uncoveredHint !== ""
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

@@ -10,7 +10,7 @@
  */
 import { localDayKey } from "../core/ledger.ts";
 import { reconcileIntervals } from "../core/native.ts";
-import { activeSpans, agentIntervals, idleStretches, partitionByProject } from "../daemon/measures.ts";
+import { activeSpans, agentIntervals, idleStretches, observedSpan, partitionByProject, uncoveredStretches } from "../daemon/measures.ts";
 import type { WorkspanStore, Observation, SessionRow, SessionNote } from "../daemon/db.ts";
 
 export interface DayOptions { date?: string; timezone?: string; now?: number }
@@ -128,6 +128,19 @@ export function renderDay(store: WorkspanStore, options: DayOptions = {}): DayRe
     if (part.ambiguous > 0) parts.push(`ambiguous ${duration(part.ambiguous)}`);
     lines.push(`  ${label}: ${duration(union)}${parts.length ? ` (${parts.join(", ")})` : ""}`);
   }
+
+  // The review list the missing-hours diagnosis asks for: the stretches of the day no
+  // measure covers, inside the span where there is evidence at all. Nothing was
+  // subtracted to produce it, and it is not a fourth total.
+  const measured = Object.values(measureData).flat().map(({ start, end }) => ({ start, end }));
+  const span = observedSpan(measured, bounds);
+  const uncovered = span ? uncoveredStretches(measured, span) : [];
+  lines.push("", "Not counted (no measure covers this stretch)", "");
+  if (!uncovered.length) lines.push("  none");
+  for (const stretch of uncovered) {
+    lines.push(`  ${clock(stretch.start, timezone)}-${clock(stretch.end, timezone)}   ${duration(stretch.end - stretch.start)}`);
+  }
+  if (uncovered.length) lines.push("  attest one with: workspan session start --at HH:MM");
 
   // Seat idle is an annotation, not a measure: it is listed for review and never
   // subtracted, because "no seat input" is not the same as "not working".

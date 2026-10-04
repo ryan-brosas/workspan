@@ -39,6 +39,9 @@ time worked, so it is shown in the popup with its own label.
   the day report labels it `no resume recorded`. It pauses nothing and subtracts
   nothing: whether that stretch was a break is the person's call. Answer it with
   `workspan note --idle "lunch"`, which lands on the session the stretch fell in.
+- A "not counted" caption: when no measure covers half an hour or more of the day,
+  the popup says how much. It is the review list from `workspan day` - nothing was
+  subtracted, and attesting the stretch is what changes a number.
 
 ## Deliberate choices
 

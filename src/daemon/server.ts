@@ -9,7 +9,8 @@ import { encodeFrame, fail, ok, parseRequest, PROTOCOL_VERSION, ProtocolError, t
 import { validateEvent, type EvidenceEvent } from "./evidence.ts";
 import { SCHEMA_VERSION, WorkspanStore, sessionKey, type IngestResult, type SessionRow } from "./db.ts";
 import { buildStatus, coveringSession, idleStretches, scopeFor, type Status, type StatusCache } from "./measures.ts";
-import { renderDay } from "./day.ts";
+import { dayBounds, renderDay } from "./day.ts";
+import { localDayKey } from "../core/ledger.ts";
 import { engineInfo, probeEngine } from "./engine.ts";
 import { socketPath as socketPathFor, statusPath } from "./paths.ts";
 
@@ -73,7 +74,12 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
   const projection: StatusCache = {};
   let cached: Status | null = null;
   const refresh = (): Status => {
-    const status = buildStatus(store, { idleGapMs, now: now(), engine, cache: projection });
+    const at = now();
+    // The day bounds are what turns the cached intervals into a review list; they are
+    // recomputed on every write, so a status file cannot carry yesterday's day.
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const day = dayBounds(localDayKey(at, timezone), timezone);
+    const status = buildStatus(store, { idleGapMs, now: at, engine, cache: projection, day });
     cached = status;
     const tmp = `${statusFile}.tmp`;
     writeFileSync(tmp, JSON.stringify(status, null, 2) + "\n", { mode: 0o600 });

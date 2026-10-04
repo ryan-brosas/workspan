@@ -4,10 +4,10 @@
  * Usage: workspan status --json | health | ingest --file f.jsonl |
  *        session start --project P | session stop --session S
  */
-import { connect } from "node:net";
 import { readFileSync } from "node:fs";
 import { socketPath as defaultSocket } from "../daemon/paths.ts";
-import { encodeFrame, parseResponse, PROTOCOL_VERSION, type Method } from "../protocol.ts";
+import { request as daemonRequest } from "../client.ts";
+import type { Method } from "../protocol.ts";
 import type { Binding } from "./pick.ts";
 import { parseMoment } from "./moment.ts";
 
@@ -33,28 +33,9 @@ const moment = (): { at?: number } => {
   return raw === undefined ? {} : { at: parseMoment(raw, Date.now()) };
 };
 
-function request(method: Method, params?: unknown, id = `cli-${Date.now()}`): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const client = connect(socketFile);
-    let buffer = "";
-    const fail = (message: string) => { client.destroy(); reject(new Error(message)); };
-    client.setTimeout(5000);
-    client.on("connect", () => client.write(encodeFrame({ v: PROTOCOL_VERSION, id, method, params })));
-    client.on("data", chunk => {
-      buffer += chunk.toString("utf8");
-      const index = buffer.indexOf("\n");
-      if (index === -1) return;
-      try {
-        const response = parseResponse(buffer.slice(0, index));
-        client.destroy();
-        if (response.ok) resolve(response.result);
-        else reject(new Error(`${response.error.code}: ${response.error.message}`));
-      } catch (error) { fail(error instanceof Error ? error.message : String(error)); }
-    });
-    client.on("timeout", () => fail(`daemon not responding at ${socketFile}`));
-    client.on("error", error => fail(`cannot reach the Workspan daemon at ${socketFile} (${(error as NodeJS.ErrnoException).code ?? "error"}); start it with: workspan daemon`));
-  });
-}
+/** One request through the shared client library, bound to this CLI's socket. */
+const request = (method: Method, params?: unknown): Promise<unknown> =>
+  daemonRequest(method, params, { socketPath: socketFile });
 /** The socket frame is capped at 64 KiB; a big import goes in batches that fit. */
 function batchEvents(events: readonly unknown[], maxBytes = 48_000): unknown[][] {
   const batches: unknown[][] = [];
@@ -352,7 +333,28 @@ async function main(): Promise<number> {
     console.log(JSON.stringify(await request("ingest", { events }), null, 2));
     return 0;
   }
-  throw new Error("usage: workspan daemon|status|engine [--check]|health|ingest --file f.jsonl|ingest-codex [--since-days N] [--dry-run]|harness|ingest-harness [--id X] [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl [--require-clean]|projects|signals|migrate --chunks f.jsonl --target db [--tracker-db pi.sqlite] [--map scope=project] [--apply]|session start|pause|resume|stop|switch|toggle --project P [--at HH:MM|ISO|ms]|note <text> [--session S | --idle]|day");
+  if (group === "doctor") {
+    // One read-only verdict over the daemon, the status file, the collector unit and
+    // its spool, the database file and every evidence source.
+    const { runDoctor } = await import("./doctor.ts");
+    const report = await runDoctor({ socketPath: socketFile });
+    if (args.includes("--json")) console.log(JSON.stringify(report, null, 2));
+    else {
+      for (const check of report.checks) console.log(`${check.state === "ok" ? "ok  " : check.state === "attention" ? "warn" : "?   "} ${check.name}: ${check.detail}`);
+      console.log(`verdict: ${report.verdict}`);
+    }
+    // A warning is information; a daemon that cannot answer is a failure.
+    return report.checks.some(check => check.name === "daemon" && check.state === "ok") ? 0 : 1;
+  }
+  if (group === "mcp") {
+    // The agent-facing tools speak the same protocol through the same client library.
+    const { serveMcpStdio } = await import("../mcp.ts");
+    await serveMcpStdio({ socketPath: socketFile });
+    // The last response has to reach the client before this process exits.
+    await new Promise<void>(resolve => { process.stdout.write("", () => resolve()); });
+    return 0;
+  }
+  throw new Error("usage: workspan daemon|status|engine [--check]|health|doctor [--json]|mcp|ingest --file f.jsonl|ingest --stdin|ingest-codex [--since-days N] [--dry-run]|harness|ingest-harness [--id X] [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl [--require-clean]|projects|signals|migrate --chunks f.jsonl --target db [--tracker-db pi.sqlite] [--map scope=project] [--apply]|session start|pause|resume|stop|switch|toggle --project P [--at HH:MM|ISO|ms]|note <text> [--session S | --idle]|day");
 }
 
 main().then(code => process.exit(code)).catch((error: unknown) => {

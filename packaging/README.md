@@ -33,7 +33,10 @@ systemctl --user status workspan.service
 
 Then check, in this order: the daemon writes both state and runtime files, the CLI
 answers over the socket, the plugin leaves its offline state, and stopping the
-service returns the plugin to offline without losing session state. Two things are
+service returns the plugin to offline without losing session state.
+`workspan doctor` answers the whole list in one command (add `--json` for scripts):
+socket, daemon, status file, collector unit, its spool, each evidence source, and the
+database file. It reads; it never repairs. Two things are
 still unverified and must be confirmed at that point rather than assumed: writing
 `%S/workspan` while `ProtectHome=read-only` is active, and the socket's actual
 mode after creation.

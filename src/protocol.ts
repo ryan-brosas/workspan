@@ -1,7 +1,8 @@
 /**
- * The private local wire protocol. One line of JSON per frame, one daemon per
- * user, one socket in the runtime directory. This is a design contract, not a
- * public API: nothing outside this repository should speak it yet.
+ * The local wire protocol: one line of JSON per frame, one daemon per user, one
+ * socket in the runtime directory. This is the public integration contract for local
+ * harness adapters and tools (docs/protocol.md): within a version the surface only
+ * grows, and every frame states the version it speaks.
  */
 export const PROTOCOL_VERSION = 1;
 /** A single frame is bounded so a malformed or hostile client cannot exhaust the daemon. */

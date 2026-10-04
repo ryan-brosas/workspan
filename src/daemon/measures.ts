@@ -125,6 +125,11 @@ export interface Status {
    * `idle_ms` is live while the stretch is open; nothing is paused or subtracted by it.
    */
   last_idle: { from: number; to: number | null; idle_ms: number; still_away: boolean } | null;
+  /**
+   * The stretches of the local day no measure covers, inside the span where evidence
+   * exists. A review list, never a subtraction: it is where the report cannot speak.
+   */
+  uncovered: { today_ms: number; stretches: Array<{ start: number; end: number }> };
   coverage: {
     events: number;
     conflicts: number;
@@ -215,6 +220,8 @@ interface Projection {
   session: { id: string; session: string; project: string | null; root: string | null; started_at: number; state: "running" | "paused"; paused_ms: number; paused_at: number | null } | null;
   /** The latest stretch only: closed duration is evidence, an open one is drawn live. */
   lastIdle: IdleStretch | null;
+  /** Every interval the measures were built from, kept so a review view needs no rebuild. */
+  intervals: { attested: Attributed[]; inferred: Attributed[]; agent: Attributed[] };
   observations: number;
   conflicts: number;
 }
@@ -275,6 +282,41 @@ export function pausedSpanMs(transitions: ReadonlyArray<{ kind: "pause" | "resum
  * what it counts, and the latest start wins if two intervals overlap after a manual
  * correction. A removed session is a correction, not a place to put new evidence.
  */
+/**
+ * Where evidence exists at all: the earliest interval start to the latest end, clipped
+ * to the bounds. A day with no intervals has no span, so nothing is called uncovered.
+ */
+export function observedSpan(intervals: readonly Segment[], bounds: { start: number; end: number }): { start: number; end: number } | null {
+  let start = Number.POSITIVE_INFINITY;
+  let end = Number.NEGATIVE_INFINITY;
+  for (const interval of intervals) {
+    if (interval.end <= bounds.start || interval.start >= bounds.end) continue;
+    start = Math.min(start, Math.max(interval.start, bounds.start));
+    end = Math.max(end, Math.min(interval.end, bounds.end));
+  }
+  return start < end ? { start, end } : null;
+}
+
+/**
+ * The stretches inside `span` that no measure covers. This is the review list the
+ * missing-hours diagnosis asks for: nothing here was subtracted from anything, and
+ * nothing here is a work total - it is the part of the day this report cannot speak
+ * for, and only the person can say what it was.
+ */
+export function uncoveredStretches(intervals: readonly Segment[], span: { start: number; end: number }): Array<{ start: number; end: number }> {
+  const out: Array<{ start: number; end: number }> = [];
+  let cursor = span.start;
+  for (const segment of sweep(intervals.filter(interval => interval.end > interval.start))) {
+    const start = Math.max(segment.start, span.start);
+    const end = Math.min(segment.end, span.end);
+    if (end <= cursor) continue;
+    if (start > cursor) out.push({ start: cursor, end: start });
+    cursor = end;
+  }
+  if (cursor < span.end) out.push({ start: cursor, end: span.end });
+  return out;
+}
+
 export function coveringSession(rows: readonly SessionRow[], at: number): SessionRow | null {
   let best: SessionRow | null = null;
   for (const row of rows) {
@@ -335,12 +377,26 @@ function computeProjection(store: WorkspanStore, options: { idleGapMs: number })
     coverage: { events: observations.length, conflicts: conflicts.length, open_agent_turns: openTurns, open_sessions: openSessions, sources: store.sources() },
     session: current,
     lastIdle: seatIdle.length ? seatIdle[seatIdle.length - 1] : null,
+    intervals: { attested, inferred, agent },
     observations: observations.length,
     conflicts: conflicts.length,
   };
 }
 
-export function buildStatus(store: WorkspanStore, options: { idleGapMs: number; now?: number; engine?: EngineInfo; cache?: StatusCache }): Status {
+/**
+ * The day's uncovered stretches, computed from the cached intervals: cheap enough to
+ * run on every status write, and never cached, so midnight cannot make it stale.
+ */
+function uncoveredForDay(intervals: { attested: Attributed[]; inferred: Attributed[]; agent: Attributed[] }, day?: { start: number; end: number }): Status["uncovered"] {
+  if (!day) return { today_ms: 0, stretches: [] };
+  const all = [...intervals.attested, ...intervals.inferred, ...intervals.agent].map(({ start, end }) => ({ start, end }));
+  const span = observedSpan(all, day);
+  if (!span) return { today_ms: 0, stretches: [] };
+  const stretches = uncoveredStretches(all, span);
+  return { today_ms: totalOf(stretches), stretches };
+}
+
+export function buildStatus(store: WorkspanStore, options: { idleGapMs: number; now?: number; engine?: EngineInfo; cache?: StatusCache; day?: { start: number; end: number } }): Status {
   const now = options.now ?? Date.now();
   const key = options.cache ? projectionKey(store, options) : "";
   let projection = options.cache?.key === key ? options.cache.projection : undefined;
@@ -365,6 +421,7 @@ export function buildStatus(store: WorkspanStore, options: { idleGapMs: number; 
       }
       : null,
     coverage: projection.coverage,
+    uncovered: uncoveredForDay(projection.intervals, options.day),
     // The cached half is the stretch itself; the duration of an open one is the
     // only field that moves with the clock, so it is computed here and not cached.
     last_idle: projection.lastIdle === null ? null : {

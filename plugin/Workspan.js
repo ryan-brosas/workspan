@@ -211,6 +211,22 @@ function idleHint(status, nowMs) {
     : "No input for " + formatDuration(away) + " \u2014 nothing was paused automatically"
 }
 
+/** Shorter than this is not worth a caption: half an hour of silence is a coffee. */
+var UNCOVERED_MIN_MS = 30 * 60_000
+
+/**
+ * The review list from the daemon: the day's stretches no measure covers, inside the
+ * span where evidence exists. Nothing was subtracted to produce it - the caption only
+ * says the report cannot speak for that time, so the person can attest it.
+ */
+function uncoveredHint(status) {
+  var uncovered = status ? status.uncovered : null
+  if (!uncovered) return ""
+  var ms = number(uncovered.today_ms)
+  if (ms < UNCOVERED_MIN_MS) return ""
+  return formatDuration(ms) + " today has no evidence \u2014 attest it in workspan day"
+}
+
 /** One line per thing the user must look at; empty means nothing needs review. */
 function warnings(status) {
   if (!status) return ["No status yet. Start the daemon: workspan daemon"]
