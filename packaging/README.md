@@ -17,15 +17,16 @@ change on the Omarchy side — is a separate, explicit approval.
 | Socket and status file | `%t/workspan/` (`$XDG_RUNTIME_DIR`), dir 0700 |
 | Restart | `on-failure`, 2s backoff |
 | Boundary | no network (`AF_UNIX` only), no privileges, `$HOME` read-only except the state dir |
-| Harness detection | on by default in the daemon entry point: probes each local agent history at start and every 5 minutes, importing into the ledger; `--no-harness` disables, `--harness-poll-ms`/`--harness-window-ms` set cadence and window |
+| Harness detection | on by default in the daemon entry point: probes each local agent history at start and every 5 minutes, importing into the ledger; `--no-harness` disables, `--harness-poll-ms` sets the poll cadence (minimum 1000 ms), `--harness-window-ms` how far back each pass reads (minimum 60000 ms, default 7 days), and `--spool-dir` the spool location (or `WORKSPAN_SPOOL_DIR`) |
 
 The daemon reads the harness stores (`~/.codex`, `~/.claude`, opencode's database)
-read-only under this sandbox; a store the sandbox cannot reach is reported as a
-reader error in `status.harness` and by `workspan doctor`, never as zero activity.
-The runtime directory is preserved across daemon restarts so a running collector's
-sandbox does not lose its writable mount. The daemon removes its socket on stop;
-`status.json` may remain and the widget marks it offline when its freshness threshold
-expires. Durable session state stays in SQLite, not this directory. The desktop
+read-only under this sandbox. A store that cannot be read is named in that reader's
+`error`; a store that is simply absent reports `available: false` - unavailable
+never zero activity - in `status.harness` and by `workspan doctor`. The runtime
+directory is preserved across daemon restarts (`RuntimeDirectoryPreserve=yes`) so a
+running collector's sandbox does not lose its writable mount. On stop the daemon
+removes its socket and leaves `status.json` in place: the widget reads a stale
+status file as offline by freshness rather than by the file disappearing. Durable session state stays in SQLite, not this directory. The desktop
 runtime spool does not survive logout/reboot; see [recovery](../docs/delivery.md).
 
 ## If it is ever installed
@@ -42,10 +43,13 @@ answers over the socket, the plugin leaves its offline state, and stopping the
 service returns the plugin to offline without losing session state.
 `workspan doctor` answers the whole list in one command (add `--json` for scripts):
 socket, daemon, status file, collector unit, its spool, automatic harness detection,
-each evidence source, and the database file. It reads; it never repairs. For every new installation, confirm
-writing `%S/workspan` under `ProtectHome=read-only` and the socket's actual mode
-rather than assuming that prior host verification applies. See the host observations
-below. The [optional backup timer](../docs/backup.md) is client-only and requires
+the conflict-review state (`coverage.conflicts`), each evidence source and the
+database file. It reads; it never repairs.
+
+For every new installation, confirm writing `%S/workspan` under
+`ProtectHome=read-only` and the socket's actual mode rather than assuming that
+prior host verification applies; those are the two items to check on a new host, and
+the observations below record what has been verified on this one. The [optional backup timer](../docs/backup.md) is client-only and requires
 its own installation/enabling approval.
 
 ## The collector unit

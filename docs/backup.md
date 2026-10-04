@@ -10,7 +10,7 @@ These are local recovery snapshots, not protection against losing the disk.
 
 ```ts
 createBackup(store: WorkspanStore, options?: { keep?: number; now?: number }): BackupResult
-// { path: string, revision: number, identities: number, schemaVersion: number, removed: number }
+// { path: string, revision: number, identities: number, schema_version: number, removed: number }
 ```
 
 - Call it only from the daemon, with its existing store; clients request it over
@@ -21,7 +21,7 @@ createBackup(store: WorkspanStore, options?: { keep?: number; now?: number }): B
   filename ordering/testing. Retention is count-based, not age-based; evidence
   is unchanged.
 - `path` is absolute. `revision`, `identities` (the unique observation count) and
-  `schemaVersion` come from the snapshot, not the subsequently changing source.
+  `schema_version` come from the snapshot, not the subsequently changing source.
   `removed` counts old validated snapshots actually deleted.
 - Errors throw. No success should be reported by the caller on failure.
 
@@ -41,7 +41,9 @@ owned directory is tightened to `0700`. A symlink directory is refused. This
 protects against other users and accidental path hazards, not malicious code
 already running as the daemon's user.
 
-Names are `workspan-backup-<16-digit timestamp>-<uuid>.sqlite`. Creation first
+Names are `workspan-backup-<16-digit timestamp>-<uuid>.sqlite`, where the timestamp
+is the millisecond value zero-padded to 16 digits (13 digits today), so names sort
+lexicographically by time and stay padded well past the millisecond range. Creation first
 writes a private `.partial` file, then validates it read-only with SQLite
 `integrity_check`, the supported schema version, revision and identity count.
 A no-overwrite hard-link publication and directory sync precede any pruning.
@@ -77,7 +79,9 @@ these two files into the user's systemd unit directory, reload that manager and
 enable `workspan-backup.timer`. This module does not perform those actions.
 A service drop-in can override `Environment=WORKSPAN_BACKUP_KEEP=14` and, for a
 custom daemon socket location, `Environment=WORKSPAN_RUNTIME_DIR=...`. The
-snapshot directory is not configurable. Review failed requests with the user
+snapshot directory is not configurable. `WORKSPAN_BACKUP_KEEP` is read by the
+packaged unit, which passes it as `--keep`; the `workspan backup` CLI itself takes
+`--keep` and ignores the variable, so a manual run is unaffected by it. Review failed requests with the user
 journal for `workspan-backup.service`; a failed backup is not a successful run.
 
 ## Restore safely
@@ -89,13 +93,17 @@ journal for `workspan-backup.service`; a failed backup is not a successful run.
    for inspection. Open that copy with `WorkspanStore`, not the managed backup
    itself, so validation/restoration does not mutate the retained original.
 3. Compare restored identity count, revision, bindings and each measure's totals
-   at the same report boundaries. The three measures remain separate; do not
+   at the same report boundaries. The three measures - attested, inferred attended
+   and agent runtime, defined in [reports](reports.md) - remain separate; do not
    add them together. Open sessions and unresolved evidence remain uncertain.
 4. Switching the daemon to a restored ledger requires separate approval and a
    plan to preserve/replay evidence accepted since the snapshot. Service stops,
    data replacement and replay are not automated by this module.
 
-The regression tests use temporary synthetic stores only:
+## Regression tests
+
+The regression tests use temporary synthetic stores only and never touch a real
+ledger:
 
 ```sh
 export PATH=~/.local/share/workspan/bend-ci/bin:$PATH

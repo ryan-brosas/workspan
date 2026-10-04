@@ -11,14 +11,15 @@ export interface BackupResult {
   revision: number;
   /** Unique stored observation identities, not hours or a sum of measures. */
   identities: number;
-  schemaVersion: number;
+  /** The evidence schema the snapshot was written with. */
+  schema_version: number;
   removed: number;
 }
 
 const MANAGED_NAME = /^workspan-backup-[0-9]{16}-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}[.]sqlite$/;
 
 /** Read without opening a WorkspanStore: validation must never migrate a backup. */
-function validateSnapshot(path: string): Pick<BackupResult, "revision" | "identities" | "schemaVersion"> {
+function validateSnapshot(path: string): Pick<BackupResult, "revision" | "identities" | "schema_version"> {
   const file = lstatSync(path);
   if (!file.isFile() || file.nlink !== 1 || (file.mode & 0o777) !== 0o600 || (process.getuid && file.uid !== process.getuid())) {
     throw new Error("Backup must be a private, owned regular file without links");
@@ -40,7 +41,7 @@ function validateSnapshot(path: string): Pick<BackupResult, "revision" | "identi
     }
     const identities = db.prepare("select count(*) as identities from observations").get()?.identities;
     if (typeof identities !== "number" || !Number.isSafeInteger(identities) || identities < 0) throw new Error("Backup identity count is invalid");
-    return { revision, identities, schemaVersion: SCHEMA_VERSION };
+    return { revision, identities, schema_version: SCHEMA_VERSION };
   } finally { db.close(); }
 }
 

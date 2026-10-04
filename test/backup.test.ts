@@ -59,7 +59,7 @@ test("a live WAL snapshot restores all three totals, identities and store state"
 
   const backup = createBackup(store, { now: base });
   expect(dirname(backup.path)).toBe(directory);
-  expect(backup).toMatchObject({ revision: store.revision(), identities: 6, schemaVersion: SCHEMA_VERSION, removed: 0 });
+  expect(backup).toMatchObject({ revision: store.revision(), identities: 6, schema_version: SCHEMA_VERSION, removed: 0 });
   expect(readdirSync(directory)).toEqual([backup.path.slice(directory.length + 1)]);
   const restored = restore(backup.path, root);
   expect(buildStatus(restored, options).measures).toEqual(expected.measures);
@@ -100,16 +100,18 @@ test("snapshot metadata stays at its captured revision while source ingestion co
 
 test("an empty ledger has a valid zero-revision snapshot", () => {
   const { store } = fixture();
-  expect(createBackup(store)).toMatchObject({ revision: 0, identities: 0, schemaVersion: SCHEMA_VERSION, removed: 0 });
+  expect(createBackup(store)).toMatchObject({ revision: 0, identities: 0, schema_version: SCHEMA_VERSION, removed: 0 });
 });
 
 test("managed directory and snapshots are private, including an existing loose directory", () => {
   const { store, directory } = fixture();
-  const first = createBackup(store);
+  // Pinned timestamps: an empty store keeps revision 0, so the two snapshots would be
+  // distinguished only by the wall clock, and a same-millisecond pair could collide.
+  const first = createBackup(store, { now: base });
   expect(statSync(directory).mode & 0o777).toBe(0o700);
   expect(statSync(first.path).mode & 0o777).toBe(0o600);
   chmodSync(directory, 0o777);
-  const next = createBackup(store);
+  const next = createBackup(store, { now: base + 1 });
   expect(statSync(directory).mode & 0o777).toBe(0o700);
   expect(statSync(next.path).mode & 0o777).toBe(0o600);
 });
@@ -253,7 +255,9 @@ test.each(["snapshot", "integrity", "schema", "revision"])("%s failure preserves
         const db = new DatabaseSync(path);
         try {
           if (failure === "schema") db.prepare("update meta set value = ? where key = 'schema_version'").run(String(SCHEMA_VERSION + 1));
-          else db.exec("insert into meta(key, value) values('revision', '-1')");
+          // Upsert, not insert: meta is keyed and the snapshot already carries a revision
+          // row, so a plain insert would throw here instead of exercising validation.
+          else db.prepare("insert into meta(key, value) values('revision', '-1') on conflict(key) do update set value = excluded.value").run();
         } finally { db.close(); }
       }
     });

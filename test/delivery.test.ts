@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:net";
-import { EvidenceSpool, drainOrphanedSpools, spoolProblems } from "../src/spool.ts";
+import { EvidenceSpool, drainOrphanedSpools, request, spoolProblems } from "../src/spool.ts";
+import { readReport } from "../src/client.ts";
 import { runDoctor } from "../src/cli/doctor.ts";
 import { WorkspanStore } from "../src/daemon/db.ts";
 import { startDaemon } from "../src/daemon/server.ts";
@@ -77,6 +78,10 @@ test("a replayed identity with different metadata is recorded for review instead
     expect(store.conflictRows()).toHaveLength(1);
     expect(existsSync(spoolPath)).toBe(false);
     expect(existsSync(spoolPath + ".error")).toBe(false);
+    // The review debt is visible in the report too, not only in status and doctor.
+    const text = await readReport({ period: "day", date: "2023-11-14", timezone: "UTC", format: "json" },
+      (method, params) => request(method, params, { socketPath: daemon.socketPath }));
+    expect((JSON.parse(text) as { warnings: string[] }).warnings).toContain("conflicting_evidence");
 
     // The review debt stays visible where it can be acted on: status, doctor, report.
     expect(daemon.status().coverage.conflicts).toBe(1);
@@ -109,6 +114,9 @@ test("a killed producer leaves a recoverable snapshot after the daemon committed
     expect(daemon.status().coverage.events).toBe(1);
     expect(daemon.status().coverage.conflicts).toBe(0);
     expect(daemon.status().delivery?.pending_bytes).toBe(0);
+    // Distinguish "startup recovery drained the orphan" from "recovery never ran":
+    // a never-drained family would still be sitting in the directory.
+    expect(readdirSync(dir).filter(name => name.startsWith("pi-spool-"))).toEqual([]);
   } finally { child.kill(); store.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 

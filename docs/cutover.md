@@ -5,7 +5,7 @@ Two ledgers exist during the shadow phase: `~/.local/state/pi-time-tracker/track
 `~/.local/state/workspan/workspan.sqlite`. **They are never added together**, and
 nothing here authorises the migration.
 
-## Where the comparison stands (2026-10-04, adapters live)
+## Where the comparison last stood (2026-10-04, adapters live)
 
 ```
 day         tracker work  ws inferred  ws attested  ws agent  inferred - tracker
@@ -22,9 +22,10 @@ windows and Workspan's inferred measure are the comparable pair: both are
 interaction-derived windows under the same idle-gap semantics. The script is
 read-only on both sides - the tracker's ledger is opened `readOnly: true`, and the
 Workspan numbers now come from exact daemon JSON reports; source windows are
-clipped at local calendar boundaries and unioned through Bend. The displayed
-minute labels are rounded only for presentation. A client must not open the
-accounting database.
+clipped at local calendar boundaries and unioned through Bend. The table above was
+captured as rounded minute labels, not exact values rounded for display; the script
+prints exact milliseconds. Because Workspan's side comes from the daemon's report
+rather than its database file, a client must not open the accounting database.
 
 The gap is expected and now shrinking: Workspan's inferred measure covers only what the
 live adapters have seen (the Pi extension, the opencode plugin and the Claude hook all
@@ -59,11 +60,13 @@ is what judges it.
 
 ## Status
 
-Local reporting/export and consistent-backup implementation is complete, but not
-new approval to deploy, enable the optional backup timer, import live history or
-retire the old writer. Binding-change replay, auditable history corrections/undo
-and popup attribution review still block cutover. Back up both ledgers and rehearse
-newly accepted evidence preservation during rollback in an explicit isolated target.
+Local reporting/export and consistent-backup implementation is complete. That is not
+approval to deploy, to enable the optional backup timer
+(`packaging/workspan-backup.timer`), to import live history or to retire the old
+writer; each of those stays separately approved. Binding-change replay, auditable
+history corrections/undo and popup attribution review still block cutover. Back up
+both ledgers and rehearse preserving newly accepted evidence during rollback, in an
+explicit isolated target.
 
 Pending: steps 1 and 2. Step 3 is measured by the script above and step 4 is the
 decision this document exists to gate. The migration imports history into an explicitly

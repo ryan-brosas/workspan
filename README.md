@@ -56,7 +56,7 @@ workspan note "reviewed the auth flow"    # the one free-text field, authored by
 workspan note --idle "lunch with client"  # answer the popup nudge on the session the stretch fell in
 workspan session start --at 09:10         # correct a boundary afterwards; the day marks it
 workspan day                              # sessions, notes, pauses and the three measures
-workspan week --date 2026-10-03 --tz UTC   # local Monday–Sunday containing the date
+workspan week --date 2026-10-03 --tz UTC  # local Monday–Sunday containing the date
 workspan day --json                       # exact millisecond facts, not rounded labels
 workspan week --export csv > week.csv     # also --export md; review, never automatic billing
 workspan backup --keep 7                  # private daemon-owned SQLite snapshot
@@ -91,13 +91,13 @@ visible. CLI/MCP exports page an immutable snapshot instead of exceeding the soc
 frame limit. [Report semantics](docs/reports.md) describe JSON/CSV/Markdown and
 [delivery recovery](docs/delivery.md) describes bounded spools, retry and refusals.
 [Backups](docs/backup.md) preserve a consistent ledger and prune only validated
-managed backup files, never evidence. The optional timer is packaged, not enabled.
+managed backup files, never evidence. The optional backup timer
+(`packaging/workspan-backup.timer`) is packaged, not enabled by default.
 
-This batch is a local implementation, not approval to deploy or cut over. Still
-open: immutable-source replay across binding changes, audited history allocation
-corrections/undo, and attribution review in the popup. Binding confirmation changes
-future ingestion only. Live import, retiring the other writer and official hours
-remain separately approved.
+Binding confirmation changes future ingestion only; immutable-source replay across
+binding changes, audited history corrections/undo and attribution review in the
+popup are still open. Live import, retiring the other writer and official hours
+remain separately approved. [Cutover](docs/cutover.md) tracks what is open.
 
 ## Harnesses
 
@@ -121,12 +121,14 @@ Detection is automatic. The daemon probes every reader when it starts and every
 five minutes after that, imports what it finds, and records each pass in
 `status.json` under `harness`: the store found, how stale it is, and how many
 records were accepted, duplicated or conflicted. `available: false` is a store
-that was not found - unavailable, never zero activity - and a reader that fails is
-named without hiding the others. `doctor` checks the pass is still running, and
+that was not found, and a reader that fails is named without hiding the others.
+`doctor` checks the pass is still running, and
 `workspan harness` prints the live probe next to the last automatic pass. The
-entry point takes `--harness-poll-ms` and `--harness-window-ms` for cadence and
-`--no-harness` to switch it off; the daemon library default is off, so a scratch
-daemon never reads live histories.
+entry point takes `--harness-poll-ms` for the poll cadence (minimum one second) and
+`--harness-window-ms` for how far back each pass reads (minimum one minute, default
+seven days), plus `--spool-dir` for the spool location, and `--no-harness` to switch
+detection off; the daemon library default is off, so a scratch daemon never reads
+live histories.
 
 ### Live adapters
 
@@ -135,7 +137,7 @@ daemon never reads live histories.
 | Pi | in-process extension (`adapters/pi`) | installed in Pi's `packages`, shadow phase, delivering |
 | opencode | plugin (`adapters/opencode`) | installed in `opencode.json`; observed delivering on 2026-10-04; plugin changes need an app-server restart |
 | Claude Code | hooks (`adapters/claude/hook.ts`) | installed for UserPromptSubmit / Stop / SubagentStop / SessionEnd |
-| Codex | none confirmed | no supported live hook verified for the installed CLI; the inspected manifest is not proof of universal hook absence — history reader stays the lane |
+| Codex | none confirmed | no supported live hook verified for the installed CLI; the inspected manifest is not proof of universal hook absence, so the history reader stays the Codex lane |
 
 An adapter emits only `{ root, session, at, kind, origin }` through `src/client.ts`,
 and the daemon resolves attribution. None of them starts a session: attestation is the
