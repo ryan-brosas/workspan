@@ -138,6 +138,18 @@ assert.equal(W.sessionLine({ ...status, current_session: { project: null, provis
 assert.equal(W.sessionLine({ ...status, current_session: { project: "coral", provisional_ms: 90_000, state: "paused" } }), "coral - 2m provisional (paused)")
 assert.match(W.tooltip(null, NOW, 30), /no status file/)
 assert.match(W.tooltip({ ...status, generated_at: NOW - 10 * 60_000 }, NOW, 30), /daemon not writing/)
+// The bar shortcut is advertised where a person looks for it.
+assert.match(W.tooltip(running, NOW, 30), /middle-click to clock in\/out/)
+
+// Clocking in and out is the popup primary action: the labels exist, and the row
+// comes before the advisory text and the company picker that used to push it below
+// the fold of a scrolling popup.
+const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
+assert.match(panel, /text: root\.sessionOpen \? "Clock out" : "Clock in"/)
+assert.ok(panel.indexOf("Clock in") < panel.indexOf("root.idleHint"), "the clock row must precede the idle nudge")
+// The picker block, not the property assignment far above it in the Process handler.
+assert.ok(panel.indexOf("Clock in") < panel.indexOf("root.companies.length > 0"), "the clock row must precede the company picker")
+assert.ok(panel.indexOf("Clock in") < panel.indexOf("Workspan.displayRows(root.snapshot)"), "the clock row must precede the measures")
 assert.match(W.tooltip(status, NOW, 30), /never added together/)
 assert.match(W.NON_ADDITIVE, /never added together/)
 

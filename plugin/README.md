@@ -16,9 +16,13 @@ $XDG_RUNTIME_DIR/workspan/workspan.sock       the daemon socket, used by the CLI
 | --- | --- |
 | Bar | The strongest *attended* evidence (attested if any, else inferred) as `1:05`; dimmed with a dot when the daemon has stopped writing, plus an optional glyph |
 | Tooltip | All three measures side by side, and the sentence that they are never added together |
-| Popup | Session controls (Start, Pause/Resume, Stop, Refresh), the session line with state and provisional time, each measure against the projects it is allocated to, unallocated and ambiguous evidence, coverage warnings, and the seat-idle nudge |
+| Popup | **Clock in / Clock out** first, with Pause/Resume and Refresh, then the session line with state and provisional time, each measure against the projects it is allocated to, unallocated and ambiguous evidence, coverage warnings, and the seat-idle nudge |
 
-For a single key or menu row, `workspan session toggle` starts when nothing is open and stops what is open.
+For a single key or menu row, `workspan session toggle` starts when nothing is open and stops
+what is open. The Omarchy menu already carries both paths: **Start / stop tracking**
+(`workspan session toggle`) and **Track for company…** (`workspan session pick`). The bar
+tooltip names the shortcut: a middle click on the widget toggles the session without
+opening the popup.
 
 Outside-harness work (a browser, ChatGPT, a call) has no workspace to derive, so
 `workspan session pick` lists the bound companies on the shell's own picker and
@@ -68,15 +72,23 @@ omarchy bar set workspan.tracker glyph 'YOUR_GLYPH_HERE'
 Leaving `statusFile` and `socketPath` empty uses the daemon defaults under
 `$XDG_RUNTIME_DIR/workspan`.
 
-## Scope
+## Install and update
 
 Installing or enabling this plugin changes desktop configuration and is a separate,
-explicitly approved step:
+explicitly approved step. The widget is user-owned shell code and lives in
+`~/.config/omarchy/plugins/workspan.tracker/`:
 
 ```sh
 omarchy plugin validate ./plugin
-omarchy plugin add <git-url> --enable        # or copy into ~/.config/omarchy/plugins/
+scripts/install-plugin.sh                    # this checkout
+scripts/install-plugin.sh --from ~/Downloads/workspan.tracker-0.2.2.zip   # a release
+scripts/install-plugin.sh --verify-only      # compare what is installed with the source
 ```
+
+The script backs up any existing copy, installs the four plugin files, and fails unless
+every installed file matches the source byte for byte - the check that catches a stale
+widget, which looks exactly like a missing feature. The shell reloads plugin code when
+a file under that directory changes; force it with `omarchy-shell shell rescanPlugins`.
 
 The plugin holds no durable state of its own: removing it loses nothing but the
 display.
