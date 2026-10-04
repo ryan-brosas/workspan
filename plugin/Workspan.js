@@ -252,7 +252,7 @@ function sessionLine(status) {
 
 function tooltip(status, nowMs, refreshSeconds) {
   var state = staleness(status, nowMs, refreshSeconds)
-  if (state === "missing") return "Workspan: no status file" + "\n" + "Left-click for details"
+  if (state === "missing") return "Workspan: no status file" + "\n" + "Click for the popup; middle-click to clock in/out"
   var lines = [
     "Attested  " + formatDuration(measure(status, "attested").unionMs),
     "Inferred  " + formatDuration(measure(status, "inferred").unionMs),
@@ -264,6 +264,9 @@ function tooltip(status, nowMs, refreshSeconds) {
     lines.unshift((open.project ? String(open.project) : "unallocated") + " - " + formatDuration(open.provisional_ms) + " provisional" + (open.state === "paused" ? " (paused)" : " (running)"))
   }
   if (state === "stale") lines.unshift("Workspan: daemon not writing")
+  // Advertise the bar shortcut where a person looks for it: the popup carries the
+  // buttons, and a middle-click toggles the session without opening anything.
+  lines.push("Click for the popup; middle-click to clock in/out")
   return lines.join("\n")
 }
 

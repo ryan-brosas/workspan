@@ -277,6 +277,42 @@ Panel {
             fontFamily: root.fontFamily
           }
 
+          // The primary action, first in the card. Clocking in and out is what a
+          // person opens this popup to do, so it never sits below the advisory text
+          // or the measures: the label names the act, and the hero above keeps the
+          // ledger vocabulary and the running time.
+          Row {
+            width: parent.width
+            spacing: Style.space(8)
+
+            Button {
+              text: root.sessionOpen ? "Clock out" : "Clock in"
+              bordered: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              enabled: !root.busy
+              onClicked: root.sessionOpen ? root.stopSession() : root.startSession()
+            }
+
+            Button {
+              visible: root.sessionOpen
+              text: root.sessionPaused ? "Resume" : "Pause"
+              bordered: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              enabled: !root.busy
+              onClicked: root.pauseOrResume()
+            }
+
+            Button {
+              text: "Refresh"
+              bordered: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.refreshNow()
+            }
+          }
+
           // The return-from-idle nudge: what the seat saw while nobody typed. It
           // reports; pausing or correcting the session stays the person's decision.
           Text {
@@ -360,38 +396,6 @@ Panel {
                   }
                 }
               }
-            }
-          }
-
-          Row {
-            width: parent.width
-            spacing: Style.space(8)
-
-            Button {
-              text: root.sessionOpen ? (root.sessionPaused ? "Resume" : "Pause") : "Start session"
-              bordered: true
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              enabled: !root.busy
-              onClicked: root.sessionOpen ? root.pauseOrResume() : root.startSession()
-            }
-
-            Button {
-              visible: root.sessionOpen
-              text: "Stop"
-              bordered: true
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              enabled: !root.busy
-              onClicked: root.stopSession()
-            }
-
-            Button {
-              text: "Refresh"
-              bordered: true
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onClicked: root.refreshNow()
             }
           }
 
