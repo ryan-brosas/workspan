@@ -12,7 +12,7 @@ import type { Method } from "./protocol.ts";
 import { WorkspanClient, readReport } from "./client.ts";
 
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
-export const SERVER_INFO = { name: "workspan", version: "0.3.1" } as const;
+export const SERVER_INFO = { name: "workspan", version: "0.4.0" } as const;
 
 interface Tool { name: string; description: string; inputSchema: Record<string, unknown> }
 
