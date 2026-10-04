@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "workspan.tracker",
   "name": "Workspan",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "author": "Ryan Brosas",
   "license": "MIT",
   "description": "Local working-time accounting: attested sessions, inferred attended windows and agent runtime, kept separate and never added together.",
