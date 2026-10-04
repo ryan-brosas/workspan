@@ -42,6 +42,12 @@ Panel {
   property double nowMs: Date.now()
   property string lastError: ""
   property bool busy: false
+  /**
+   * What the time was for. This is the ledger's one free-text field (single line,
+   * at most 200 characters, exactly the CLI's bound), typed by the person and
+   * attached to the session either when clocking out or with Save note.
+   */
+  property string activity: ""
 
   readonly property string freshness: Workspan.staleness(snapshot, nowMs, refreshSeconds)
   readonly property bool online: freshness === "fresh"
@@ -94,7 +100,21 @@ Panel {
 
   function stopSession() {
     var value = root.sessionOpen ? String(root.snapshot.current_session.session || "") : ""
-    root.runCli(value === "" ? ["session", "stop"] : ["session", "stop", "--session", value])
+    var args = value === "" ? ["session", "stop"] : ["session", "stop", "--session", value]
+    // Clock out carries the activity: it is written as the session note on the way
+    // out, and cleared once it is recorded so the next session starts blank.
+    var note = root.activity.trim()
+    if (note !== "") args = args.concat(["--note", note])
+    root.activity = ""
+    root.runCli(args)
+  }
+
+  /** Attach the typed activity to the running session without stopping it. */
+  function saveNote() {
+    var note = root.activity.trim()
+    if (note === "") return
+    root.activity = ""
+    root.runCli(["note", note])
   }
 
   function toggleSession() { root.sessionOpen ? root.stopSession() : root.startSession() }
@@ -304,6 +324,28 @@ Panel {
               onClicked: root.pauseOrResume()
             }
 
+            // The session controls that were here before stay here: Clock out
+            // carries the activity, Stop is the plain stop.
+            Button {
+              visible: root.sessionOpen
+              text: "Stop"
+              bordered: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              enabled: !root.busy
+              onClicked: root.stopSession()
+            }
+
+            Button {
+              visible: root.sessionOpen && root.activity.trim() !== ""
+              text: "Save note"
+              bordered: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              enabled: !root.busy
+              onClicked: root.saveNote()
+            }
+
             Button {
               text: "Refresh"
               bordered: true
@@ -311,6 +353,22 @@ Panel {
               fontFamily: root.fontFamily
               onClicked: root.refreshNow()
             }
+          }
+
+          // The activity rides with the clock action: Clock out writes it as the
+          // session note, Save note attaches it to the running session, and Enter
+          // does whichever of the two the current state allows. The 200-character
+          // cap is the daemon's own bound for the note.
+          TextField {
+            width: parent.width
+            placeholderText: "What were you doing? (saved on Clock out)"
+            foreground: root.foreground
+            font.family: root.fontFamily
+            text: root.activity
+            maximumLength: 200
+            enabled: !root.busy
+            onTextChanged: root.activity = text
+            onAccepted: root.sessionOpen ? root.saveNote() : root.startSession()
           }
 
           // The return-from-idle nudge: what the seat saw while nobody typed. It

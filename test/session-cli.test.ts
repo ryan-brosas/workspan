@@ -40,6 +40,11 @@ test("the widget's clock in and out commands drive one attested session end to e
   expect((await cli("session", "pause")).code).toBe(0);
   expect((await cli("session", "resume")).code).toBe(0);
 
+  // The popup's Save note path: an activity attaches to the running session.
+  expect((await cli("note", "paired with the agent")).code).toBe(0);
+  // The field mirrors the daemon's own bound for the note.
+  expect((await cli("note", "x".repeat(201))).code).not.toBe(0);
+
   // Clock out, with the note a person would attach.
   const stop = await cli("session", "stop", "--session", started.session, "--note", "reviewed the auth flow");
   expect(stop.code).toBe(0);
@@ -52,4 +57,6 @@ test("the widget's clock in and out commands drive one attested session end to e
   const session = facts.days.flatMap(day => day.sessions).find(row => row.notes.includes("reviewed the auth flow"));
   expect(session).toBeDefined();
   expect(session!.ended_at).not.toBeNull();
+  // Both activities are the person's own words, kept in order.
+  expect(session!.notes).toContain("paired with the agent");
 });

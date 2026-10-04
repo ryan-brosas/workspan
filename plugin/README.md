@@ -16,7 +16,7 @@ $XDG_RUNTIME_DIR/workspan/workspan.sock       the daemon socket, used by the CLI
 | --- | --- |
 | Bar | The strongest *attended* evidence (attested if any, else inferred) as `1:05`; dimmed with a dot when the daemon has stopped writing, plus an optional glyph |
 | Tooltip | All three measures side by side, and the sentence that they are never added together |
-| Popup | **Clock in / Clock out** first, with Pause/Resume and Refresh, then the session line with state and provisional time, each measure against the projects it is allocated to, unallocated and ambiguous evidence, coverage warnings, and the seat-idle nudge |
+| Popup | **Clock in / Clock out** first, with Pause/Resume, Stop, Refresh and Save note, plus the activity field that rides with them. Then the session line with state and provisional time, each measure against the projects it is allocated to, unallocated and ambiguous evidence, coverage warnings, and the seat-idle nudge |
 
 For a single key or menu row, `workspan session toggle` starts when nothing is open and stops
 what is open. The Omarchy menu already carries both paths: **Start / stop tracking**
@@ -43,6 +43,11 @@ time worked, so it is shown in the popup with its own label.
   the day report labels it `no resume recorded`. It pauses nothing and subtracts
   nothing: whether that stretch was a break is the person's call. Answer it with
   `workspan note --idle "lunch"`, which lands on the session the stretch fell in.
+
+The popup's activity field is that same note: one line, at most 200 characters, typed by
+the person - the ledger's only free text. **Clock out** writes it as the session note and
+clears the field; **Save note** attaches it to the running session without stopping it.
+Attribution stays the company picker: nothing is inferred from what you type.
 - A "not counted" caption: when no measure covers half an hour or more of the day,
   the popup says how much. It is the review list from `workspan day` - nothing was
   subtracted, and attesting the stretch is what changes a number.

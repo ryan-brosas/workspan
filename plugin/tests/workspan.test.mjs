@@ -150,6 +150,18 @@ assert.ok(panel.indexOf("Clock in") < panel.indexOf("root.idleHint"), "the clock
 // The picker block, not the property assignment far above it in the Process handler.
 assert.ok(panel.indexOf("Clock in") < panel.indexOf("root.companies.length > 0"), "the clock row must precede the company picker")
 assert.ok(panel.indexOf("Clock in") < panel.indexOf("Workspan.displayRows(root.snapshot)"), "the clock row must precede the measures")
+
+// Clocking in and out is an additional action, never a replacement: the session
+// controls that were there before stay there.
+assert.match(panel, /text: "Stop"/)
+assert.match(panel, /text: "Save note"/)
+
+// The activity field mirrors the daemon note bound, and rides with the clock
+// actions: a note on the way out, or a note attached while the session runs.
+assert.match(panel, /placeholderText: "What were you doing\?/)
+assert.match(panel, /maximumLength: 200/)
+assert.match(panel, /args = args\.concat\(\["--note", note\]\)/)
+assert.match(panel, /root\.runCli\(\["note", note\]\)/)
 assert.match(W.tooltip(status, NOW, 30), /never added together/)
 assert.match(W.NON_ADDITIVE, /never added together/)
 
