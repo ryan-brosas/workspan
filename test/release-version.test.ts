@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
-import { classify, compareVersions, latestVersion, nextVersion, releaseState } from "../scripts/release-version.ts";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { classify, compareVersions, latestVersion, nextVersion, releaseState, stampVersion } from "../scripts/release-version.ts";
 
 test("the release level follows Conventional Commits", () => {
   expect(classify(["feat: something"])).toBe("minor");
@@ -35,6 +38,23 @@ test("a tree with nothing since its last tag has nothing to release", () => {
   expect(idle.level).toBe("none");
   expect(idle.version).toBeNull();
   expect(releaseState({ lastTag: "", explicit: "1.0.0" }).version).toBe("1.0.0");
+});
+
+test("stamping a version the files already state is a no-op, never an error", () => {
+  // The recovery path after a partial failure: the tree is bumped but the tag is
+  // missing, so the same run must be able to repeat itself.
+  const dir = mkdtempSync(join(tmpdir(), "ws-stamp-"));
+  const file = (name: string, text: string) => { const path = join(dir, name); writeFileSync(path, text); return { path, stamp: (value: string, version: string) => value.replace(/"version": "[^"]+"/, `"version": "${version}"`) }; };
+  const files = [file("a.json", '{ "version": "1.2.3" }'), file("b.json", '{ "version": "1.2.2" }')];
+  try {
+    expect(stampVersion("1.2.3", files)).toEqual([join(dir, "b.json")]);
+    expect(readFileSync(files[0]!.path, "utf8")).toContain('"version": "1.2.3"');
+    expect(readFileSync(files[1]!.path, "utf8")).toContain('"version": "1.2.3"');
+    // Repeating the same stamp changes nothing and still does not throw.
+    expect(stampVersion("1.2.3", files)).toEqual([]);
+    // A file that carries no version at all is still a failure.
+    expect(() => stampVersion("2.0.0", [file("c.json", "{}")])).toThrow("does not carry a version");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("tag ordering understands prereleases", () => {

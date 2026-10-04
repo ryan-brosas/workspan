@@ -64,7 +64,9 @@ jobs:
           EXPLICIT: ${{ github.event_name == 'workflow_dispatch' && inputs.version || '' }}
         run: |
           set -euo pipefail
-          if git log -1 --format=%s | grep -qE '^chore\(release\):'; then
+          # A push of a release commit publishes nothing by itself; a dispatch on one is
+          # the recovery path, so it is allowed through.
+          if [ "${GITHUB_EVENT_NAME}" = "push" ] && git log -1 --format=%s | grep -qE '^chore\(release\):'; then
             echo "head is already a release commit; nothing to publish"
             echo "released=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -85,11 +87,22 @@ jobs:
           grep -q "name: \"workspan\", version: \"$version\"" src/mcp.ts
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json plugin/manifest.json src/mcp.ts
-          git commit -m "chore(release): v$version [skip ci]"
-          git tag -a "v$version" -m "Workspan v$version"
-          git push origin HEAD:main
-          git push origin "v$version"
+          if git diff --quiet -- package.json plugin/manifest.json src/mcp.ts; then
+            echo "the version files already state v$version; publishing the tag only"
+          else
+            git add package.json plugin/manifest.json src/mcp.ts
+            git commit -m "chore(release): v$version [skip ci]"
+            git push origin HEAD:main
+          fi
+          # The tag is what publishes it, and a partial failure must not strand a release
+          # with a bumped tree and no tag: an existing tag is accepted as done, and the
+          # push is retried once before the run fails.
+          if git ls-remote --tags origin "refs/tags/v$version" | grep -q "refs/tags/v$version"; then
+            echo "tag v$version already exists on the remote; leaving it as it is"
+          else
+            git tag -a "v$version" -m "Workspan v$version"
+            git push origin "v$version" || { echo "tag push failed; retrying once"; sleep 5; git push origin "v$version"; }
+          fi
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
           echo "released=true" >> "$GITHUB_OUTPUT"
           echo "released v$version"

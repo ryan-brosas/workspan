@@ -116,7 +116,12 @@ export function stampVersion(version: string, files: readonly VersionFile[] = VE
   for (const file of files) {
     const text = readFileSync(file.path, "utf8");
     const next = file.stamp(text, version);
-    if (next === text) throw new Error(`${file.path} does not carry a version to stamp`);
+    if (next === text) {
+      // Already at this version: a retry after a partial failure, not an error. The
+      // file must still carry a version, otherwise the pattern has drifted.
+      if (!text.includes(version)) throw new Error(`${file.path} does not carry a version to stamp`);
+      continue;
+    }
     writeFileSync(file.path, next);
     stamped.push(file.path);
   }
