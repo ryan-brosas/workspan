@@ -1,13 +1,31 @@
 name: Release
 
-# One release authority: a human pushes a vX.Y.Z tag, and this workflow proves the
-# tagged tree with the same gates CI runs before anything is published.
+# One release authority, and it runs itself.
+#
+# A merge to main derives the next version from the commits that landed, stamps every
+# version file, tags it and publishes the release with the Omarchy plugin package. A
+# human-pushed vX.Y.Z tag still publishes exactly that revision, and a manual dispatch
+# can choose the level. GitHub delivers no event for a tag created with GITHUB_TOKEN,
+# so the automatic path tags and publishes inside one run instead of waiting on the
+# tag trigger below.
 on:
   push:
+    branches: [main]
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Release level
+        type: choice
+        options: [auto, patch, minor, major, prerelease]
+        default: auto
+      version:
+        description: Exact version to publish (overrides the level)
+        type: string
+        required: false
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -19,28 +37,102 @@ jobs:
       contents: read
     uses: ./.github/workflows/verify.yml
 
-  publish:
-    name: publish
+  version:
+    name: version
+    # A tag push already states its version; only a merge to main derives one.
+    if: github.ref == 'refs/heads/main'
     needs: verify
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.bump.outputs.tag }}
+      released: ${{ steps.bump.outputs.released }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0            # the tag and the commit history the level comes from
+          persist-credentials: true # this job pushes the version commit and its tag
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.0
+      - name: Derive, stamp and tag the next version
+        id: bump
+        env:
+          BUMP: ${{ github.event_name == 'workflow_dispatch' && inputs.bump || 'auto' }}
+          EXPLICIT: ${{ github.event_name == 'workflow_dispatch' && inputs.version || '' }}
+        run: |
+          set -euo pipefail
+          if git log -1 --format=%s | grep -qE '^chore\(release\):'; then
+            echo "head is already a release commit; nothing to publish"
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          args=(--bump "$BUMP" --write)
+          if [ -n "$EXPLICIT" ]; then args+=(--version "$EXPLICIT"); fi
+          version=$(bun scripts/release-version.ts "${args[@]}")
+          if [ -z "$version" ]; then
+            echo "no releasable commit since the last tag; nothing to publish"
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Only version literals changed, so the whole risk is a mangled stamp: prove each
+          # file still parses and agrees with the version before committing it unreviewed.
+          jq -e . package.json plugin/manifest.json > /dev/null
+          test "$(jq -r .version package.json)" = "$version"
+          test "$(jq -r .version plugin/manifest.json)" = "$version"
+          grep -q "name: \"workspan\", version: \"$version\"" src/mcp.ts
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json plugin/manifest.json src/mcp.ts
+          git commit -m "chore(release): v$version [skip ci]"
+          git tag -a "v$version" -m "Workspan v$version"
+          git push origin HEAD:main
+          git push origin "v$version"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "released=true" >> "$GITHUB_OUTPUT"
+          echo "released v$version"
+
+  publish:
+    name: publish
+    needs: [verify, version]
+    # An automatic run publishes what it tagged; a tag push publishes that revision.
+    if: always() && needs.verify.result == 'success' && (github.ref_type == 'tag' || needs.version.outputs.released == 'true')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.tag || github.ref_name }}
           persist-credentials: false
       - name: Package the Omarchy plugin
+        id: pack
+        env:
+          TAG: ${{ needs.version.outputs.tag || github.ref_name }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          set -euo pipefail
+          version="${TAG#v}"
           mkdir -p "$RUNNER_TEMP/pack/workspan.tracker"
           cp plugin/manifest.json plugin/Panel.qml plugin/Workspan.js plugin/README.md "$RUNNER_TEMP/pack/workspan.tracker/"
           (cd "$RUNNER_TEMP/pack" && zip -qr "$RUNNER_TEMP/workspan.tracker-$version.zip" workspan.tracker)
+          # The package must state the version it is published under.
+          test "$(jq -r .version "$RUNNER_TEMP/pack/workspan.tracker/manifest.json")" = "$version"
+          echo "zip=$RUNNER_TEMP/workspan.tracker-$version.zip" >> "$GITHUB_OUTPUT"
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag || github.ref_name }}
+          ZIP: ${{ steps.pack.outputs.zip }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          set -euo pipefail
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "release $TAG already exists; leaving it untouched"
+            exit 0
+          fi
+          version="${TAG#v}"
           prerelease=""
-          case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP/workspan.tracker-$version.zip" \
-            --title "Workspan $version" \
-            --generate-notes $prerelease
+          case "$TAG" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "$TAG" "$ZIP" --title "Workspan $version" --generate-notes $prerelease
