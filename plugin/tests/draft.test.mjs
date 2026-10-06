@@ -20,7 +20,10 @@ test("a draft belongs to the session it was first typed in", () => {
 })
 
 test("Save note names its session explicitly", () => {
-  assert.deepEqual(argv(D.noteArgv("  wrap up  ", "s1")), ["note", "wrap up", "--session", "s1"])
+  assert.deepEqual(argv(D.noteArgv("  wrap up  ", "s1")), ["note", "--session", "s1", "--", "wrap up"])
+  for (const text of ["--session", "--socket", "--idle", "--"]) {
+    assert.deepEqual(argv(D.noteArgv(text, "s1")), ["note", "--session", "s1", "--", text])
+  }
   assert.equal(D.noteArgv("   ", "s1"), null, "whitespace is no note")
   assert.equal(D.noteArgv("text", ""), null, "a draft with no session cannot be filed")
 })

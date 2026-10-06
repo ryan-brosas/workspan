@@ -16,11 +16,12 @@ function draftSessionFor(text, draftSession, session) {
 
 /** The argv that saves the draft, or null when there is nothing to save. The
  *  session is named explicitly, so the note lands where it was typed even if
- *  the session has since stopped or switched. */
+ *  the session has since stopped or switched, and the words travel after "--":
+ *  a note like "--idle" or "--session" is the person's text, never an option. */
 function noteArgv(text, draftSession) {
   var value = String(text == null ? "" : text).trim()
   if (value === "" || draftSession === "") return null
-  return ["note", value, "--session", draftSession]
+  return ["note", "--session", draftSession, "--", value]
 }
 
 /** The argv that clocks out, or null when the draft blocks it: a draft from

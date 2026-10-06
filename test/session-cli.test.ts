@@ -72,6 +72,11 @@ test("the draft paths: previous-session notes, leading-dash words, one line only
     return { code: await proc.exited, stdout, stderr };
   };
   try {
+    // --explicit is a boolean and must not consume the following root.
+    const binding = await send("projects", "bind", "--explicit", root, "literal-notes");
+    expect(binding.code).toBe(0);
+    const bindings = JSON.parse((await send("projects", "--json")).stdout) as Array<{ root: string; explicit: boolean }>;
+    expect(bindings.find(row => row.root === root)?.explicit).toBe(true);
     const started = JSON.parse((await send("session", "start")).stdout) as { session: string };
     // Plain stop stores no note.
     expect((await send("session", "stop", "--session", started.session)).code).toBe(0);
@@ -79,14 +84,33 @@ test("the draft paths: previous-session notes, leading-dash words, one line only
     expect((await send("note", "drafted while it ran", "--session", started.session)).code).toBe(0);
     // A note is not a flag: leading dashes stay the words of the person.
     expect((await send("note", "--debugged the parser", "--session", started.session)).code).toBe(0);
+    // Literal notes must never become targeting, socket or idle flags.
+    const literalNotes = ["--session", "--socket", "--idle", "--at", "--", "note"];
+    for (const note of literalNotes) {
+      expect((await send("note", "--session", started.session, "--", note)).code).toBe(0);
+    }
     // A note stays a single line, as the daemon requires.
     expect((await send("note", "two\nlines", "--session", started.session)).code).not.toBe(0);
-    const facts = JSON.parse((await send("day", "--json")).stdout) as { days: Array<{ sessions: Array<{ notes: string[]; ended_at: number | null }> }> };
+    const facts = JSON.parse((await send("day", "--json")).stdout) as { days: Array<{ sessions: Array<{ session: string; notes: string[]; ended_at: number | null }> }> };
     const row = facts.days.flatMap(day => day.sessions).find(session => session.notes.includes("drafted while it ran"));
     expect(row).toBeDefined();
     expect(row!.ended_at).not.toBeNull();
     expect(row!.notes).toContain("--debugged the parser");
+    for (const note of literalNotes) expect(row!.notes).toContain(note);
     expect(row!.notes.some(note => note.includes("two\nlines"))).toBe(false);
+
+    // Option values that look like flags (including the delimiter itself) stay
+    // values even when the real targeting flag follows the note.
+    for (const note of ["--session", "--"]) {
+      const next = JSON.parse((await send("session", "start")).stdout) as { session: string };
+      const stopped = await send("session", "stop", "--note", note, "--session", next.session);
+      expect(stopped.code).toBe(0);
+      const day = JSON.parse((await send("day", "--json")).stdout) as typeof facts;
+      const stoppedSession = day.days.flatMap(day => day.sessions).find(session => session.session === next.session);
+      expect(stoppedSession).toBeDefined();
+      expect(stoppedSession!.notes).toEqual([note]);
+      expect(stoppedSession!.ended_at).not.toBeNull();
+    }
   } finally {
     await local.close(); store.close(); rmSync(root, { recursive: true, force: true });
   }

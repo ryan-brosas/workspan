@@ -15,13 +15,22 @@ import type { Binding } from "./pick.ts";
 import { parseMoment } from "./moment.ts";
 
 const args = process.argv.slice(2);
-const FLAGS = new Set(["--socket", "--project", "--root", "--explicit", "--session", "--file", "--db", "--since-days", "--since-hours", "--limit", "--instance", "--turns", "--chunks", "--target", "--map", "--tracker-db", "--at", "--date", "--tz", "--export", "--keep"]);
-const flags = (name: string): string[] => {
-  const out: string[] = [];
-  for (let i = 0; i < args.length; i++) if (args[i] === name && args[i + 1] !== undefined) out.push(args[i + 1]);
-  return out;
-};
-const flag = (name: string): string | undefined => { const at = args.indexOf(name); return at === -1 ? undefined : args[at + 1]; };
+const FLAGS = new Set(["--socket", "--project", "--root", "--session", "--file", "--db", "--since-days", "--since-hours", "--limit", "--instance", "--turns", "--chunks", "--target", "--map", "--tracker-db", "--at", "--date", "--tz", "--export", "--keep", "--note", "--reason", "--id"]);
+/** A flag's value is the token right after it, even when that value itself looks
+ *  like a flag, and the first occurrence wins - the order the widget already
+ *  sends: socket first, then session, then the note. "--" ends option parsing:
+ *  what follows is free text and never an option, so a note of "--session"
+ *  cannot retarget the note or borrow the socket. */
+const optionValues = (() => {
+  const values = new Map<string, string[]>();
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--") break;
+    if (FLAGS.has(args[i]) && args[i + 1] !== undefined) { values.set(args[i], [...(values.get(args[i]) ?? []), args[i + 1]]); i++; }
+  }
+  return values;
+})();
+const flags = (name: string): string[] => optionValues.get(name) ?? [];
+const flag = (name: string): string | undefined => optionValues.get(name)?.[0];
 const positional: string[] = [];
 for (let i = 0; i < args.length; i++) {
   if (FLAGS.has(args[i])) { i++; continue; }
@@ -218,19 +227,25 @@ async function main(): Promise<number> {
     // The words are scanned from the tokens after the group: a note is not a flag,
     // so "--debugged the parser" stays the person's words instead of vanishing.
     const start = args.indexOf("note") + 1;
+    // The widget sends the note after "--", so its words are never options; a
+    // person whose activity is literally "--idle" must not have it read as the
+    // flag that refiles the note onto an idle stretch.
+    const end = args.indexOf("--", start);
+    const options = end === -1 ? args : args.slice(0, end);
     const words: string[] = [];
-    for (let i = start; i < args.length; i++) {
+    for (let i = start; i < (end === -1 ? args.length : end); i++) {
       if (args[i] === "--idle") continue;
       if (args[i] === "--session" || args[i] === "--socket") { i++; continue; }
       words.push(args[i]);
     }
+    if (end !== -1) words.push(...args.slice(end + 1));
     const text = words.join(" ");
-    if (!text) throw new Error("usage: workspan note <what you did> [--session S | --idle]");
+    if (!text) throw new Error("usage: workspan note [--session S | --idle] [--] <what you did>");
     const target = flag("--session");
     console.log(JSON.stringify(await request("session.note", {
       note: text,
       ...(target !== undefined ? { session: target } : {}),
-      ...(args.includes("--idle") ? { idle: true } : {}),
+      ...(options.includes("--idle") ? { idle: true } : {}),
     }), null, 2));
     return 0;
   }
@@ -428,7 +443,7 @@ async function main(): Promise<number> {
     await new Promise<void>(resolve => { process.stdout.write("", () => resolve()); });
     return 0;
   }
-  throw new Error("usage: workspan daemon|status|engine [--check]|health|doctor [--json]|mcp|ingest --file f.jsonl|ingest --stdin|ingest-codex [--since-days N] [--dry-run]|harness|ingest-harness [--id X] [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl [--require-clean]|projects|signals|migrate --chunks f.jsonl --target db [--tracker-db pi.sqlite] [--map scope=project] [--apply]|session start|pause|resume|stop|switch|toggle --project P [--at HH:MM|ISO|ms]|note <text> [--session S | --idle]|day|week [--date YYYY-MM-DD] [--tz ZONE] [--json|--export csv|md]|backup [--keep N]");
+  throw new Error("usage: workspan daemon|status|engine [--check]|health|doctor [--json]|mcp|ingest --file f.jsonl|ingest --stdin|ingest-codex [--since-days N] [--dry-run]|harness|ingest-harness [--id X] [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl [--require-clean]|projects|signals|migrate --chunks f.jsonl --target db [--tracker-db pi.sqlite] [--map scope=project] [--apply]|session start|pause|resume|stop|switch|toggle --project P [--at HH:MM|ISO|ms]|note [--session S | --idle] [--] <text>|day|week [--date YYYY-MM-DD] [--tz ZONE] [--json|--export csv|md]|backup [--keep N]");
 }
 
 main().then(code => process.exit(code)).catch((error: unknown) => {

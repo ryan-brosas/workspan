@@ -53,6 +53,9 @@ A draft whose session has since stopped or switched still belongs to that sessio
 popup says so, Save note names that session explicitly, and it never rides along with
 a different session's clock out. Enter saves a note and never clocks in; Escape hands
 the keys back to the panel without clearing anything.
+Save note sends the activity after the CLI's `--` delimiter, so text such as
+`--session` or `--idle` stays text rather than changing the note's target; from a
+terminal, `workspan note --session S -- "--idle"` saves that literal note.
 Attribution stays the company picker: nothing is inferred from what you type.
 - A "not counted" caption: when no measure covers half an hour or more of the day,
   the popup says how much. It is the review list from `workspan day` - nothing was
@@ -79,8 +82,8 @@ Attribution stays the company picker: nothing is inferred from what you type.
   therefore lives in `Draft.js` and `Workspan.js` - pure `.pragma library`
   files that `node --test` executes directly - and the QML stays a thin
   binding to stock components. Keyboard focus behavior (the `PanelKeyCatcher`
-  `blocked` binding) is checked live on the bar; stubbing the stock components
-  for a green test is not an option.
+  `blocked` binding) must be checked live on the bar; it is not proven by these
+  Node tests. Stubbing the stock components for a green test is not an option.
 
 ## Settings
 
@@ -114,5 +117,5 @@ there keeps the same manifest id, and two directories claiming `workspan.tracker
 the bar resolve the widget to the stale copy. The shell reloads plugin code when
 a file under that directory changes; force it with `omarchy-shell shell rescanPlugins`.
 
-The plugin holds no durable state of its own: removing it loses nothing but the
-display.
+The plugin holds no durable state of its own. Removing or recreating it can lose
+an unsaved activity draft, but daemon sessions and saved notes are unaffected.
