@@ -152,12 +152,21 @@ assert.ok(panel.indexOf("SessionControls") < panel.indexOf("root.idleHint"), "th
 // The picker block, not the property assignment far above it in the Process handler.
 assert.ok(panel.indexOf("SessionControls") < panel.indexOf("root.companies.length > 0"), "the controls must precede the company picker")
 assert.ok(panel.indexOf("SessionControls") < panel.indexOf("Workspan.displayRows(root.snapshot)"), "the controls must precede the measures")
+assert.ok(panel.includes("SessionControls"), "the panel must instantiate the controls")
+assert.match(panel, /SessionControls\s*\{/)
 // Wiring: a dispatch refusal is not a save, a draft clears only when the daemon
 // accepted the command that carried it, and the panel's shortcuts stand down
 // while the controls own keys.
 assert.match(panel, /blocked: controls\.activeFocus/)
 assert.match(panel, /controls\.completeCommand\(code === 0\)/)
-assert.match(panel, /if \(cliProcess\.running\) return false/)
+assert.match(panel, /if \(cliProcess\.running\) \{/)
+// The launch-failure settlement is real wiring in Panel.qml, not only in the
+// offscreen probe: a missing CLI must be told from an ordinary exit.
+assert.match(panel, /function finishCli\(/)
+assert.match(panel, /onStarted: cliProcess\.launchStarted = true/)
+assert.match(panel, /onRunningChanged: \{/)
+assert.match(panel, /if \(running \|\| cliProcess\.launchStarted \|\| !root\.busy\) return/)
+assert.match(panel, /cliProcess\.launchStarted = false/)
 // Manual clocking stays an addition: every original session button is still
 // there, and every argv decision about the draft lives in Draft.js, whose laws
 // draft.test.mjs executes.

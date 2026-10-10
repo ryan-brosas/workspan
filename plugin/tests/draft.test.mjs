@@ -6,8 +6,11 @@ import test from "node:test"
 // Draft.js is a QML library; here it is evaluated with an explicit export list so
 // the same source is testable without QML.
 const source = fs.readFileSync(new URL("../Draft.js", import.meta.url), "utf8").replace(/^\.pragma library\s*/, "")
-const sandbox = { module: { exports: {} }, String, Array, JSON, Math }
-vm.runInNewContext(source + "\nmodule.exports = { draftSessionFor, noteArgv, clockOutArgv, stopArgv, activityAfterCompletion }", sandbox, { filename: "Draft.js" })
+// A fresh vm context already provides the standard intrinsics, so the sandbox
+// only needs the export target: injecting host constructors would make any
+// instanceof check inside Draft.js compare against the wrong realm.
+const sandbox = { module: { exports: {} } }
+vm.runInNewContext(source + "\nmodule.exports = { draftSessionFor, noteArgv, clockOutArgv, clockOutConsumesDraft, stopArgv, activityAfterCompletion }", sandbox, { filename: "Draft.js" })
 const D = sandbox.module.exports
 // argv arrays come from the vm realm; copy them so structural equality is not
 // tripped by the different Array prototypes of two realms.
@@ -34,6 +37,14 @@ test("Clock out carries only the draft that belongs to the current session", () 
   assert.deepEqual(argv(D.clockOutArgv("", "s1", "s1")), ["session", "stop", "--session", "s1"])
   assert.equal(D.clockOutArgv("old work", "s1", "s2"), null, "a stale draft blocks the ride-along")
   assert.equal(D.clockOutArgv("work", "s1", ""), null, "no session to clock out")
+})
+
+test("Clock out carries a flag-like or padded note verbatim", () => {
+  assert.deepEqual(argv(D.clockOutArgv("--socket", "s1", "s1")), ["session", "stop", "--session", "s1", "--note", "--socket"])
+  assert.deepEqual(argv(D.clockOutArgv("  auth work  ", "s1", "s1")), ["session", "stop", "--session", "s1", "--note", "auth work"])
+  assert.equal(D.clockOutConsumesDraft("--socket", "s1", "s1"), true, "a real draft rides with its own session")
+  assert.equal(D.clockOutConsumesDraft("", "s1", "s1"), false, "no draft, no note")
+  assert.equal(D.clockOutConsumesDraft("work", "s1", "s2"), false, "a stale draft does not ride along")
 })
 
 test("the plain stop never carries a note", () => {

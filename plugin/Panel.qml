@@ -57,6 +57,9 @@ Panel {
   readonly property var verticalLines: root.vertical ? root.barText.split("\n") : []
   readonly property bool sessionOpen: !!(snapshot && snapshot.current_session)
   readonly property bool sessionPaused: !!(snapshot && snapshot.current_session && snapshot.current_session.state === "paused")
+  /** One extraction of the running session id: the controls pin drafts to it and
+   *  a plain stop targets it, so the two can never drift apart. */
+  readonly property string currentSessionId: root.sessionOpen ? String(root.snapshot.current_session.session || "") : ""
 
   // The stock clock's sizing: the widget mirrors its button, and the button
   // measures itself from the label, one iconSlot per stacked line when vertical.
@@ -82,11 +85,28 @@ Panel {
   // never writes to the database itself. The return says whether the command
   // was dispatched: a refusal leaves the caller's state untouched, so a busy
   // daemon never reads as a saved note.
+  // Settle one dispatched CLI command exactly once: release busy, surface the
+  // failure, and let the controls clear only the draft the daemon accepted.
+  function finishCli(code, errorText) {
+    root.busy = false
+    root.lastError = errorText
+    controls.completeCommand(code === 0)
+    root.refreshNow()
+  }
+
   function runCli(args) {
-    if (cliProcess.running) return false
+    if (cliProcess.running) {
+      // A refused command must not look like it was sent: every bar click and
+      // button shares this path, so the refusal must be visible.
+      root.lastError = "A command is already in progress"
+      return false
+    }
     root.lastError = ""
     root.busy = true
     cliProcess.command = [root.cliPath, "--socket", root.socketFile].concat(args)
+    // Reset the launch mark for this command: only a command that really starts
+    // emits started(), and that is what tells a failed launch from a normal exit.
+    cliProcess.launchStarted = false
     cliProcess.running = true
     return true
   }
@@ -98,8 +118,7 @@ Panel {
   // Plain stop: it carries no note. The activity draft lives in SessionControls,
   // which decides separately whether it rides with a Clock out.
   function stopSession() {
-    var value = root.sessionOpen ? String(root.snapshot.current_session.session || "") : ""
-    root.runCli(value === "" ? ["session", "stop"] : ["session", "stop", "--session", value])
+    root.runCli(root.currentSessionId === "" ? ["session", "stop"] : ["session", "stop", "--session", root.currentSessionId])
   }
 
   function toggleSession() { root.sessionOpen ? root.stopSession() : root.startSession() }
@@ -185,14 +204,25 @@ Panel {
   Process {
     id: cliProcess
     running: false
+    // Quickshell reports a binary it cannot launch by dropping `running` without
+    // ever emitting `exited`; `started` is the only mark that the process really
+    // ran, so a missing CLI can be told from a normal exit. Without this a launch
+    // failure would leave busy (and the controls' in-flight mark) set forever.
+    property bool launchStarted: false
     stdout: StdioCollector { id: cliOut; waitForEnd: true }
     stderr: StdioCollector { id: cliErr; waitForEnd: true }
+    onStarted: cliProcess.launchStarted = true
     onExited: function (code) {
-      root.busy = false
-      root.lastError = code === 0 ? "" : (Workspan.shortMessage(cliErr.text) || ("workspan exited with " + code))
       // The draft clears only when the daemon accepted the command that carried it.
-      controls.completeCommand(code === 0)
-      root.refreshNow()
+      root.finishCli(code, code === 0 ? "" : (Workspan.shortMessage(cliErr.text) || ("workspan exited with " + code)))
+    }
+    onRunningChanged: {
+      // Reached without started() and without onExited only when the command
+      // never launched. Settle it as a failure so the popup reports it, releases
+      // busy, and keeps the draft. A normal exit has launchStarted set and is
+      // settled by onExited, so this never double-settles.
+      if (running || cliProcess.launchStarted || !root.busy) return
+      root.finishCli(127, "Could not start the workspan command: " + root.cliPath)
     }
   }
 
@@ -288,7 +318,7 @@ Panel {
           SessionControls {
             id: controls
             width: parent.width
-            session: root.sessionOpen ? String(root.snapshot.current_session.session || "") : ""
+            session: root.currentSessionId
             paused: root.sessionPaused
             project: root.project
             busy: root.busy
@@ -513,7 +543,6 @@ Panel {
                 wrapMode: Text.WordWrap
               }
             }
-
           }
         }
       }

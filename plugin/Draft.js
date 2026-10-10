@@ -26,12 +26,21 @@ function noteArgv(text, draftSession) {
   return ["note", "--session", draftSession, "--", value]
 }
 
+/** Whether clocking out files the draft: the one predicate for "this draft
+ *  belongs to the session being stopped", read by both the argv and the QML. */
+function clockOutConsumesDraft(text, draftSession, session) {
+  if (session === "") return false
+  return String(text == null ? "" : text).trim() !== "" && draftSession === session
+}
+
 /** The argv that clocks out, or null when the draft blocks it: a draft from
- *  another session never rides along with this one's stop. */
+ *  another session never rides along with this one's stop. The --note decision
+ *  comes from clockOutConsumesDraft, so the argv and the QML's consumesDraft
+ *  flag can never disagree about the same draft. */
 function clockOutArgv(text, draftSession, session) {
   if (session === "") return null
   var value = String(text == null ? "" : text).trim()
-  if (value !== "" && draftSession !== session) return null
+  if (value !== "" && !clockOutConsumesDraft(text, draftSession, session)) return null
   var argv = ["session", "stop", "--session", session]
   if (value !== "") argv = argv.concat(["--note", value])
   return argv

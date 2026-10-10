@@ -16,7 +16,7 @@ $XDG_RUNTIME_DIR/workspan/workspan.sock       the daemon socket, used by the CLI
 | --- | --- |
 | Bar | The strongest *attended* evidence (attested if any, else inferred) as `1:05`; dimmed with a dot when the daemon has stopped writing, plus an optional glyph |
 | Tooltip | All three measures side by side, and the sentence that they are never added together |
-| Popup | The session buttons that were always there - **Start session / Pause / Resume / Stop / Refresh** - and below them the manual activity draft: a one-line field with **Clock in / Clock out**, **Save note** and **Discard draft**. Then the session line with state and provisional time, each measure against the projects it is allocated to, unallocated and ambiguous evidence, coverage warnings, and the seat-idle nudge |
+| Popup | The session buttons - **Start session / Pause / Resume / Stop / Refresh** - and below them the manual activity draft: a one-line field with **Clock in / Clock out**, **Save note** and **Discard draft**. Then the session line with state and provisional time, each measure against the projects it is allocated to, unallocated and ambiguous evidence, coverage warnings, the seat-idle nudge and the Dot nudge caption, and the agent runtime's own labeled line |
 
 For a single key or menu row, `workspan session toggle` starts when nothing is open and stops
 what is open. The Omarchy menu already carries both paths: **Start / stop tracking**
@@ -47,15 +47,19 @@ time worked, so it is shown in the popup with its own label.
 The popup's activity field is that same note: one line, at most 200 characters, typed by
 the person - the ledger's only free text. **Save note** files it to the session it was
 typed in, without stopping that session; **Clock out** closes the session and sends the
-field as its closing note; **Stop** is the plain stop and never sends it. The field clears
+field as its closing note; **Stop** is the plain stop and never sends it; **Clock in**
+starts a session without touching the field, so a draft stays pinned to its original
+session and the field keeps its text. Apart from **Discard draft**, the field clears
 only after the daemon accepts the command - a failed or busy command keeps the text.
 A draft whose session has since stopped or switched still belongs to that session: the
 popup says so, Save note names that session explicitly, and it never rides along with
-a different session's clock out. Enter saves a note and never clocks in; Escape hands
-the keys back to the panel without clearing anything.
-Save note sends the activity after the CLI's `--` delimiter, so text such as
-`--session` or `--idle` stays text rather than changing the note's target; from a
-terminal, `workspan note --session S -- "--idle"` saves that literal note.
+a different session's clock out or clock in. Enter saves a note and never clocks in;
+Escape hands the keys back to the panel without clearing anything.
+Save note sends the activity after the CLI's `--` delimiter; Clock out's closing note
+travels as the value consumed by `--note` instead. Both keep text such as `--session`
+or `--idle` as text rather than reading it as a flag - which would either retarget the
+note or mark attendance; from a terminal,
+`workspan note --session <id> -- "--idle"` saves that literal note.
 Attribution stays the company picker: nothing is inferred from what you type.
 - A "not counted" caption: when no measure covers half an hour or more of the day,
   the popup says how much. It is the review list from `workspan day` - nothing was
@@ -76,14 +80,14 @@ Attribution stays the company picker: nothing is inferred from what you type.
   bar's native tooltip, press states and offline dimming.
 - **Decisions in a plain library, not in QML.** The shell's stock components
   cannot run under `qml` or `qmltestrunner` outside the shell itself: the
-  `qs.Commons` singletons import Quickshell, and that module exits with no
-  objects loaded (plain QtQuick loads offscreen; importing `Quickshell` or
-  `qs.Commons` fails, verified 2026-10-05). Every argv and draft decision
+  `qs.Commons` singletons import Quickshell, so the `qml`/`qmltestrunner`
+  process exits without loading any objects (plain QtQuick loads offscreen;
+  importing `Quickshell` or `qs.Commons` fails). Every argv and draft decision
   therefore lives in `Draft.js` and `Workspan.js` - pure `.pragma library`
-  files that `node --test` executes directly - and the QML stays a thin
-  binding to stock components. Keyboard focus behavior (the `PanelKeyCatcher`
-  `blocked` binding) must be checked live on the bar; it is not proven by these
-  Node tests. Stubbing the stock components for a green test is not an option.
+  files exercised by `node --test plugin/tests/*.test.mjs` - and the QML stays
+  a thin binding to stock components. Keyboard focus behavior (the
+  `PanelKeyCatcher` `blocked` binding) must be checked live on the bar; the
+  Node tests under `plugin/tests/` cannot prove it.
 
 ## Settings
 
@@ -117,5 +121,6 @@ there keeps the same manifest id, and two directories claiming `workspan.tracker
 the bar resolve the widget to the stale copy. The shell reloads plugin code when
 a file under that directory changes; force it with `omarchy-shell shell rescanPlugins`.
 
-The plugin holds no durable state of its own. Removing or recreating it can lose
-an unsaved activity draft, but daemon sessions and saved notes are unaffected.
+The plugin holds no durable state of its own. Removing, recreating or reloading it -
+or restarting the shell - can lose an unsaved activity draft, but daemon sessions
+and saved notes are unaffected.

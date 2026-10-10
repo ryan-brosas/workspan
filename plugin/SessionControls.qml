@@ -21,9 +21,12 @@ FocusScope {
   property string activity: ""
   property string draftSession: ""
   property var pendingDraft: null
+  /** Set before dispatch and cleared by completeCommand, so an in-flight command
+   *  blocks a second one even before the host reports busy. */
+  property bool inFlight: false
   readonly property bool hasDraft: activity.trim() !== ""
   readonly property bool staleDraft: hasDraft && draftSession !== session
-  readonly property bool available: !busy && pendingDraft === null
+  readonly property bool available: !busy && !inFlight
   signal refreshRequested()
   signal escapeRequested()
 
@@ -38,14 +41,22 @@ FocusScope {
   function submit(args, consumesDraft) {
     if (!available) return false
     var pending = consumesDraft ? { text: activity, session: draftSession } : null
-    if (!dispatch(args)) return false
+    // Mark in flight before dispatch: a synchronous completion must still clear
+    // the submitted draft instead of leaving a snapshot no exit will ever settle.
+    inFlight = true
     pendingDraft = pending
+    if (!dispatch(args)) {
+      inFlight = false
+      pendingDraft = null
+      return false
+    }
     return true
   }
 
   // The host calls this when the CLI exits. Failures keep the draft; a success
   // clears only the exact draft that was submitted.
   function completeCommand(success) {
+    inFlight = false
     var submitted = pendingDraft
     pendingDraft = null
     var settled = Draft.activityAfterCompletion(activity, draftSession, submitted, success)
@@ -64,7 +75,7 @@ FocusScope {
 
   function clockOut() {
     var argv = Draft.clockOutArgv(activity, draftSession, session)
-    return argv === null ? false : submit(argv, hasDraft && draftSession === session)
+    return argv === null ? false : submit(argv, Draft.clockOutConsumesDraft(activity, draftSession, session))
   }
 
   function saveNote() {

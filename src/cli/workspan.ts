@@ -16,6 +16,9 @@ import { parseMoment } from "./moment.ts";
 
 const args = process.argv.slice(2);
 const FLAGS = new Set(["--socket", "--project", "--root", "--session", "--file", "--db", "--since-days", "--since-hours", "--limit", "--instance", "--turns", "--chunks", "--target", "--map", "--tracker-db", "--at", "--date", "--tz", "--export", "--keep", "--note", "--reason", "--id"]);
+/** The options that are genuinely booleans. Every other recognizable option takes
+ *  a value; an unknown leading-dash token is a typo, never a silent boolean. */
+const BOOLEANS = new Set(["--explicit", "--json", "--check", "--idle", "--apply", "--allow-live-database", "--dry-run", "--stdin", "--require-clean"]);
 /** One canonical read of argv, so option values, booleans, positionals and the
  *  real free-text delimiter can never disagree about which token is which. A
  *  flag's value is the token right after it, even when that value itself looks
@@ -35,17 +38,30 @@ const positional: string[] = [];
  *  that happens to spell the same word - an option value of "note" is a value. */
 const positionalAt: number[] = [];
 let delimiter = -1;
+/** A value-taking option left as the last token, named once the parse is done. */
+let missingValue = "";
+/** Leading-dash tokens that are neither options nor booleans: a typo, or the
+ *  note command's documented free text. */
+const unknownFlags: string[] = [];
 for (let i = 0; i < args.length; i++) {
   if (delimiter !== -1) { tokens.push("word"); positional.push(args[i]); positionalAt.push(i); continue; }
   if (args[i] === "--") { delimiter = i; tokens.push("delimiter"); continue; }
-  if (FLAGS.has(args[i]) && args[i + 1] !== undefined) {
+  if (FLAGS.has(args[i])) {
+    // A value-taking option with no value must error, not become a silent
+    // boolean: "session stop --session" otherwise stops whatever is open.
+    if (args[i + 1] === undefined) { missingValue = args[i]; tokens.push("flag"); present.add(args[i]); continue; }
     optionValues.set(args[i], [...(optionValues.get(args[i]) ?? []), args[i + 1]]);
     present.add(args[i]);
     tokens.push("flag", "value");
     i++;
     continue;
   }
-  if (args[i].startsWith("--")) { present.add(args[i]); tokens.push("flag"); continue; }
+  if (args[i].startsWith("--")) {
+    present.add(args[i]);
+    tokens.push("flag");
+    if (!BOOLEANS.has(args[i])) unknownFlags.push(args[i]);
+    continue;
+  }
   tokens.push("word"); positional.push(args[i]); positionalAt.push(i);
 }
 const flags = (name: string): string[] => optionValues.get(name) ?? [];
@@ -104,6 +120,17 @@ async function ingestBatched(events: readonly unknown[]): Promise<Record<string,
 
 async function main(): Promise<number> {
   const [group, action] = positional;
+  // Shape errors are named once, before any command runs. The note command's
+  // leading-dash words are documented free text, so only it may carry unknowns.
+  // The daemon owns its own option contract: the packaged unit starts it with
+  // --foreground, and its entry point also accepts --runtime-dir, --spool-dir,
+  // --idle-gap-ms, --status-interval-ms, --harness-poll-ms, --harness-window-ms
+  // and --no-harness. This parser forwards argv untouched, so it must not
+  // impose the client's typo/missing-value rules on `daemon`; every other
+  // command keeps them.
+  const forwarding = group === "daemon";
+  if (missingValue && !forwarding) throw new Error(`option ${missingValue} requires a value`);
+  if (group !== "note" && !forwarding && unknownFlags.length) throw new Error(`unknown option ${unknownFlags[0]}`);
   if (group === "health") { console.log(JSON.stringify(await request("health"), null, 2)); return 0; }
   if (group === "daemon") {
     // The foreground daemon, as the packaged unit starts it. The daemon owns this
@@ -231,7 +258,11 @@ async function main(): Promise<number> {
     return 0;
   }
   if (group === "session" && action === "stop") {
-    const note = flag("--note");
+    const explicit = flag("--note");
+    // The delimiter is advertised as the way literal text travels: a stop with
+    // free text after "--" files it as the closing note instead of dropping it.
+    const free = delimiter !== -1 && delimiter + 1 < args.length ? args.slice(delimiter + 1).join(" ") : "";
+    const note = explicit !== undefined ? explicit : (free === "" ? undefined : free);
     console.log(JSON.stringify(await request("session.stop", { session: flag("--session"), ...(note !== undefined ? { note } : {}), ...moment() }), null, 2));
     return 0;
   }
@@ -250,12 +281,20 @@ async function main(): Promise<number> {
       if (i === delimiter) continue;
       if (delimiter !== -1 && i > delimiter) { words.push(args[i]); continue; }
       if (tokens[i] === "value") continue;
-      if (tokens[i] === "flag" && (FLAGS.has(args[i]) || args[i] === "--idle")) continue;
+      if (FLAGS.has(args[i])) {
+        // This subcommand consumes only --session (plus the global --socket). Any
+        // other recognized option would be deleted from the note and ignored:
+        // refuse it rather than drop the person's words silently.
+        if (args[i] !== "--session" && args[i] !== "--socket") throw new Error(`workspan note does not take ${args[i]}; put it after -- to keep it in the note`);
+        continue;
+      }
+      if (args[i] === "--idle") continue;
       words.push(args[i]);
     }
     const text = words.join(" ");
     if (!text) throw new Error("usage: workspan note [--session S | --idle] [--] <what you did>");
     const target = flag("--session");
+    if (target !== undefined && has("--idle")) throw new Error("choose --session or --idle, not both");
     console.log(JSON.stringify(await request("session.note", {
       note: text,
       ...(target !== undefined ? { session: target } : {}),
@@ -457,7 +496,7 @@ async function main(): Promise<number> {
     await new Promise<void>(resolve => { process.stdout.write("", () => resolve()); });
     return 0;
   }
-  throw new Error("usage: workspan daemon|status|engine [--check]|health|doctor [--json]|mcp|ingest --file f.jsonl|ingest --stdin|ingest-codex [--since-days N] [--dry-run]|harness|ingest-harness [--id X] [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl [--require-clean]|projects|signals|migrate --chunks f.jsonl --target db [--tracker-db pi.sqlite] [--map scope=project] [--apply]|session start|pause|resume|stop|switch|toggle --project P [--at HH:MM|ISO|ms]|note [--session S | --idle] [--] <text>|day|week [--date YYYY-MM-DD] [--tz ZONE] [--json|--export csv|md]|backup [--keep N]");
+  throw new Error("usage: workspan daemon|status|engine [--check]|health|doctor [--json]|mcp|ingest --file f.jsonl|ingest --stdin|ingest-codex [--since-days N] [--dry-run]|harness|ingest-harness [--id X] [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl [--require-clean]|projects|signals|migrate --chunks f.jsonl --target db [--tracker-db pi.sqlite] [--map scope=project] [--apply]|session start|pause|resume|switch|toggle --project P [--at HH:MM|ISO|ms]|session stop [--session S] [--note <text>] [-- <text>]|note [--session S | --idle] [--] <text>|day|week [--date YYYY-MM-DD] [--tz ZONE] [--json|--export csv|md]|backup [--keep N]");
 }
 
 main().then(code => process.exit(code)).catch((error: unknown) => {

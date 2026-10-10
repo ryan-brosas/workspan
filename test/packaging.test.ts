@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -20,55 +20,78 @@ const installerFiles = ["manifest.json", "Panel.qml", "SessionControls.qml", "Dr
 const scratch = mkdtempSync(join(tmpdir(), "workspan-install-plugin-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
-/** Run the installer with HOME/XDG_STATE_HOME pointed at a throwaway dir, so no
- *  live widget, backup directory or shell config is read or written. */
+/** The output of the most recent installIn run, attached to the next assertion
+ *  so a failing status shows the installer's own message. */
+let lastInstallOutput = "";
+
+/** Run the installer with HOME and every XDG base directory pointed at a
+ *  throwaway dir, so no live widget, backup directory or shell config is read or
+ *  written - even an installer that honors the XDG spec. */
 function installIn(home: string, ...args: string[]): number {
   const result = spawnSync("bash", [join(repoRoot, "scripts", "install-plugin.sh"), ...args], {
     cwd: repoRoot,
-    env: { ...process.env, HOME: home, XDG_STATE_HOME: join(home, ".local", "state") },
+    env: {
+      ...process.env,
+      HOME: home,
+      XDG_STATE_HOME: join(home, ".local", "state"),
+      XDG_CONFIG_HOME: join(home, ".config"),
+      XDG_DATA_HOME: join(home, ".local", "share"),
+      XDG_CACHE_HOME: join(home, ".cache"),
+    },
     encoding: "utf8",
   });
   if (result.error) throw result.error;
+  lastInstallOutput = `${result.stdout ?? ""}${result.stderr ?? ""}`;
   return result.status ?? -1;
 }
 
-/** A release-shaped ZIP whose workspan.tracker/ holds exactly the named plugin files. */
+/** The installer's ZIP path already depends on a host unzip; the test builds
+ *  the archive with the matching host zip. Probe that prerequisite once, so a
+ *  machine without it gets a named message instead of an opaque spawn ENOENT.
+ *  The original review allowed either an in-process writer or this probe; the
+ *  in-process writer was ~80 lines of ZIP format code kept only for this
+ *  fixture, and the installer reads ZIPs with host tools anyway. */
+const hasZip = spawnSync("zip", ["-v"], { stdio: "ignore" }).status === 0;
+
+/** A release-shaped ZIP whose workspan.tracker/ holds exactly the named plugin
+ *  files, built with host zip and read back by the installer's own unzip. */
 function packageZip(zipPath: string, names: string[]): void {
-  const stage = mkdtempSync(join(scratch, "stage-"));
-  const dir = join(stage, "workspan.tracker");
-  mkdirSync(dir, { recursive: true });
-  for (const name of names) cpSync(join(repoRoot, "plugin", name), join(dir, name));
-  const zipped = spawnSync("zip", ["-qr", zipPath, "workspan.tracker"], { cwd: stage, encoding: "utf8" });
+  const dir = mkdtempSync(join(scratch, "zip-src-"));
+  const pkgDir = join(dir, "workspan.tracker");
+  mkdirSync(pkgDir);
+  for (const name of names) copyFileSync(join(repoRoot, "plugin", name), join(pkgDir, name));
+  const zipped = spawnSync("zip", ["-q", "-r", zipPath, "workspan.tracker"], { cwd: dir, encoding: "utf8" });
   if (zipped.error) throw zipped.error;
-  expect(zipped.status).toBe(0);
+  if (zipped.status !== 0) throw new Error("zip failed (" + zipped.status + "): " + (zipped.stderr ?? ""));
 }
 
 test("installing the source plugin succeeds and a matching verify-only also succeeds", () => {
   const home = mkdtempSync(join(scratch, "home-source-"));
   // A clean run with no --from leaves the cleanup work dir empty; that path must
   // still exit 0 rather than inherit the EXIT trap's failed test status.
-  expect(installIn(home)).toBe(0);
+  expect(installIn(home), lastInstallOutput).toBe(0);
   for (const name of installerFiles) expect(existsSync(join(home, INSTALLED, name))).toBe(true);
-  expect(installIn(home, "--verify-only")).toBe(0);
+  expect(installIn(home, "--verify-only"), lastInstallOutput).toBe(0);
 });
 
 test("a tampered installation fails verification", () => {
   const home = mkdtempSync(join(scratch, "home-tampered-"));
-  expect(installIn(home)).toBe(0);
+  expect(installIn(home), lastInstallOutput).toBe(0);
   writeFileSync(join(home, INSTALLED, "Panel.qml"), "// tampered\n");
-  expect(installIn(home, "--verify-only")).not.toBe(0);
+  expect(installIn(home, "--verify-only"), lastInstallOutput).not.toBe(0);
 });
 
 test("a released ZIP installs and verifies; a ZIP missing a plugin file is refused", () => {
+  if (!hasZip) throw new Error("the ZIP install path needs the host zip binary to build its fixture; install zip (e.g. pacman -S zip)");
   const good = join(scratch, "workspan.tracker-test.zip");
   packageZip(good, installerFiles);
   const home = mkdtempSync(join(scratch, "home-zip-"));
-  expect(installIn(home, "--from", good)).toBe(0);
-  expect(installIn(home, "--verify-only")).toBe(0);
+  expect(installIn(home, "--from", good), lastInstallOutput).toBe(0);
+  expect(installIn(home, "--verify-only"), lastInstallOutput).toBe(0);
 
   const bad = join(scratch, "workspan.tracker-bad.zip");
   packageZip(bad, installerFiles.filter(name => name !== "Draft.js"));
   const refused = mkdtempSync(join(scratch, "home-refused-"));
-  expect(installIn(refused, "--from", bad)).toBe(2);
+  expect(installIn(refused, "--from", bad), lastInstallOutput).toBe(2);
   expect(existsSync(join(refused, INSTALLED))).toBe(false);
 });

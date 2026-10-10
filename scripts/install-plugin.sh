@@ -31,10 +31,9 @@ while [ "$#" -gt 0 ]; do
 done
 
 work=""
-# The EXIT trap's status becomes the script's status under `set -e`, so an empty
-# work dir (every run without --from) must still leave a success, not a failed test.
-cleanup() { [ -z "$work" ] || rm -rf "$work"; }
-trap cleanup EXIT
+# The EXIT trap must never become the script's status under `set -e`: restore the
+# status that triggered the exit, and treat a failed cleanup as its own problem.
+trap 'rc=$?; [ -z "$work" ] || rm -rf "$work" || true; exit "$rc"' EXIT
 
 if [ -n "$from" ]; then
   [ -f "$from" ] || { echo "install-plugin: no such artifact: $from" >&2; exit 2; }
