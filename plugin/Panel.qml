@@ -81,19 +81,18 @@ Panel {
 
   function refreshNow() { statusView.reload() }
 
-  // Commands are an argv array: no shell text is interpolated, and the plugin
-  // never writes to the database itself. The return says whether the command
-  // was dispatched: a refusal leaves the caller's state untouched, so a busy
-  // daemon never reads as a saved note.
   // Settle one dispatched CLI command exactly once: release busy, surface the
   // failure, and let the controls clear only the draft the daemon accepted.
   function finishCli(code, errorText) {
+    if (!root.busy) return
     root.busy = false
     root.lastError = errorText
     controls.completeCommand(code === 0)
     root.refreshNow()
   }
 
+  // Commands are argv, never shell text. Return whether dispatch was accepted;
+  // refusal leaves the caller's draft untouched. Only the daemon writes state.
   function runCli(args) {
     if (cliProcess.running) {
       // A refused command must not look like it was sent: every bar click and
@@ -147,7 +146,7 @@ Panel {
   }
 
   function projectClicked(project) {
-    root.runCli(root.sessionOpen ? ["session", "switch", "--project", project] : ["session", "start", "--project", project])
+    return root.runCli(root.sessionOpen ? ["session", "switch", "--project", project] : ["session", "start", "--project", project])
   }
 
   Process {
@@ -239,7 +238,7 @@ Panel {
     hasVisualContent: root.vertical ? root.verticalLines.length > 0 : true
     fixedHeight: root.vertical ? root.verticalLines.length * Style.bar.iconSlot : -1
     dimmed: !root.online
-    tooltipText: Workspan.tooltip(root.snapshot, root.nowMs, root.refreshSeconds)
+    tooltipText: (root.lastError ? root.lastError + "\n" : "") + Workspan.tooltip(root.snapshot, root.nowMs, root.refreshSeconds)
 
     onPressed: function (mouseButton) {
       if (mouseButton === Qt.RightButton) root.refreshNow()
@@ -418,8 +417,7 @@ Panel {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
-                      root.projectClicked(companyRow.modelData.project)
-                      root.close()
+                      if (root.projectClicked(companyRow.modelData.project)) root.close()
                     }
                   }
                 }

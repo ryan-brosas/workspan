@@ -148,12 +148,13 @@ const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
 const controls = fs.readFileSync(new URL("../SessionControls.qml", import.meta.url), "utf8")
 // The controls are the whole action surface and stay above everything
 // advisory: the session buttons that were always there, plus the draft.
-assert.ok(panel.indexOf("SessionControls") < panel.indexOf("root.idleHint"), "the controls must precede the idle nudge")
+const controlsAt = panel.search(/SessionControls\s*\{/);
+assert.ok(controlsAt !== -1, "the panel must instantiate the controls")
+assert.ok(controlsAt < panel.indexOf("root.idleHint"), "the controls must precede the idle nudge")
 // The picker block, not the property assignment far above it in the Process handler.
-assert.ok(panel.indexOf("SessionControls") < panel.indexOf("root.companies.length > 0"), "the controls must precede the company picker")
-assert.ok(panel.indexOf("SessionControls") < panel.indexOf("Workspan.displayRows(root.snapshot)"), "the controls must precede the measures")
-assert.ok(panel.includes("SessionControls"), "the panel must instantiate the controls")
-assert.match(panel, /SessionControls\s*\{/)
+assert.ok(controlsAt < panel.indexOf("root.companies.length > 0"), "the controls must precede the company picker")
+assert.ok(controlsAt < panel.indexOf("Workspan.displayRows(root.snapshot)"), "the controls must precede the measures")
+assert.match(panel, /if \(root\.projectClicked\(companyRow\.modelData\.project\)\) root\.close\(\)/)
 // Wiring: a dispatch refusal is not a save, a draft clears only when the daemon
 // accepted the command that carried it, and the panel's shortcuts stand down
 // while the controls own keys.

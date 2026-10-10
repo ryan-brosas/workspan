@@ -3,24 +3,25 @@ import fs from "node:fs"
 import vm from "node:vm"
 import test from "node:test"
 
-const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
-const controls = fs.readFileSync(new URL("../SessionControls.qml", import.meta.url), "utf8")
-const draftSource = fs.readFileSync(new URL("../Draft.js", import.meta.url), "utf8").replace(/^\.pragma library\s*/, "")
+const normalizeSource = source => source.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n")
+const readSource = path => normalizeSource(fs.readFileSync(new URL(path, import.meta.url), "utf8"))
+const panel = readSource("../Panel.qml")
+const controls = readSource("../SessionControls.qml")
+const draftSource = readSource("../Draft.js").replace(/^\s*\.pragma\s+library[^\n]*\n?/m, "")
 
-// Panel.qml is QML, so the handler under test is extracted from source rather
-// than imported. The signature match tolerates spacing; only the two-space
-// closing brace stays fixed, because the body is what the test needs.
-function helper(name) {
-  const match = panel.match(new RegExp("^  function " + name + "\\s*\\([^)]*\\)\\s*\\{\\n([\\s\\S]*?)\\n  \\}", "m"))
-  assert.ok(match, "function " + name + " not found in Panel.qml - update the extraction regex")
+// Execute shipped handler bodies, not a reimplementation. This is not rendered
+// QML proof: the two-space closing brace remains part of the extraction contract.
+function extractBody(source, label, name) {
+  const match = source.match(new RegExp("^  function " + name + "\\s*\\([^)]*\\)\\s*\\{\\n([\\s\\S]*?)\\n  \\}", "m"))
+  assert.ok(match, "function " + name + " not found in " + label + " - update the extraction regex")
   return match[1]
 }
+const helper = name => extractBody(panel, "Panel.qml", name)
+const controlsBody = name => extractBody(controls, "SessionControls.qml", name)
 
 test("plain Stop never consumes an activity draft", () => {
   let sent
   const root = { activity: "reviewed auth", currentSessionId: "session-a", runCli: args => { sent = args } }
-  // Compile the body as a function: an early return in the QML handler must
-  // behave like a return, not throw an illegal top-level return.
   vm.runInNewContext("(function () {\n" + helper("stopSession") + "\n})()", { root })
   assert.equal(root.activity, "reviewed auth")
   assert.ok(Array.isArray(sent), "stopSession did not dispatch a stop command")
@@ -36,17 +37,7 @@ test("runCli refuses a busy process visibly without replacing its command", () =
   assert.deepEqual(cliProcess.command, ["existing"])
 })
 
-// SessionControls.submit/completeCommand are exercised from the real source with
-// the real Draft.js, the way the critic's probe did. This is not rendered-QML
-// proof, but it is the shipped bodies, not a reimplementation.
-function controlsBody(name) {
-  const match = controls.match(new RegExp("^  function " + name + "\\s*\\([^)]*\\)\\s*\\{\\n([\\s\\S]*?)\\n  \\}", "m"))
-  assert.ok(match, "function " + name + " not found in SessionControls.qml - update the extraction regex")
-  return match[1]
-}
-
 const Draft = vm.runInNewContext(draftSource + "\n({ activityAfterCompletion })")
-
 function makeControls(dispatch) {
   const c = { activity: "  work  ", draftSession: "s1", pendingDraft: null, inFlight: false, busy: false, Draft }
   Object.defineProperty(c, "available", { get() { return !c.busy && !c.inFlight } })
@@ -81,13 +72,60 @@ test("submit/completeCommand: a command is single-flight, and a non-draft one ne
   assert.equal(calls, 1)
   c.completeCommand(true)
   assert.equal(c.activity, "  work  ", "a non-draft command leaves the draft alone")
-  assert.equal(c.available, true)
+  assert.equal(c.inFlight, false)
 })
 
 test("submit/completeCommand: a failed command keeps the submitted draft", () => {
   const c = makeControls(() => true)
   c.submit(["note"], true)
+  assert.deepEqual(JSON.parse(JSON.stringify(c.pendingDraft)), { text: "  work  ", session: "s1" })
   c.completeCommand(false)
+  assert.equal(c.pendingDraft, null)
   assert.equal(c.activity, "  work  ")
   assert.equal(c.inFlight, false)
+})
+
+test("source extraction normalizes CRLF and BOM", () => {
+  const windows = "\uFEFF" + panel.replace(/\n/g, "\r\n")
+  assert.equal(extractBody(normalizeSource(windows), "Panel.qml", "runCli"), helper("runCli"))
+})
+
+test("submit rolls back a throwing dispatcher and permits a retry", () => {
+  let calls = 0
+  const c = makeControls(() => { if (++calls === 1) throw new Error("launch failure"); return true })
+  assert.equal(c.submit(["note"], true), false)
+  assert.equal(c.inFlight, false)
+  assert.equal(c.pendingDraft, null)
+  assert.equal(c.activity, "  work  ")
+  assert.equal(c.submit(["note"], true), true)
+  c.completeCommand(true)
+  assert.equal(c.activity, "")
+})
+
+test("host settlement is inert without a controls command", () => {
+  const c = makeControls(() => true)
+  c.completeCommand(true)
+  assert.equal(c.activity, "  work  ")
+  assert.equal(c.pendingDraft, null)
+  assert.equal(c.inFlight, false)
+})
+
+test("finishCli ignores a second completion of the same command", () => {
+  let completions = 0
+  let refreshes = 0
+  const root = { busy: true, lastError: "", refreshNow: () => refreshes++ }
+  const controls = { completeCommand: () => completions++ }
+  const finish = vm.runInNewContext("(function(code,errorText){" + helper("finishCli") + "})", { root, controls })
+  finish(127, "launch failed")
+  finish(0, "")
+  assert.equal(root.busy, false)
+  assert.equal(root.lastError, "launch failed")
+  assert.equal(completions, 1)
+  assert.equal(refreshes, 1)
+})
+
+test("a refused project dispatch reports false so the popup stays open", () => {
+  const root = { sessionOpen: true, runCli: () => false }
+  const pick = vm.runInNewContext("(function(project){" + helper("projectClicked") + "})", { root })
+  assert.equal(pick("project"), false)
 })

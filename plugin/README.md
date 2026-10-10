@@ -16,7 +16,7 @@ $XDG_RUNTIME_DIR/workspan/workspan.sock       the daemon socket, used by the CLI
 | --- | --- |
 | Bar | The strongest *attended* evidence (attested if any, else inferred) as `1:05`; dimmed with a dot when the daemon has stopped writing, plus an optional glyph |
 | Tooltip | All three measures side by side, and the sentence that they are never added together |
-| Popup | The session buttons - **Start session / Pause / Resume / Stop / Refresh** - and below them the manual activity draft: a one-line field with **Clock in / Clock out**, **Save note** and **Discard draft**. Then the session line with state and provisional time, each measure against the projects it is allocated to, unallocated and ambiguous evidence, coverage warnings, the seat-idle nudge and the Dot nudge caption, and the agent runtime's own labeled line |
+| Popup | The session buttons - **Start session, Pause/Resume, Stop, Refresh** - and below them the manual activity draft: a one-line field with **Clock in / Clock out**, **Save note** and **Discard draft**. Then the session line with state and provisional time, each measure against the projects it is allocated to, unallocated and ambiguous evidence, coverage warnings, the seat-idle nudge and the Dot nudge caption, and the agent runtime's own labeled line |
 
 For a single key or menu row, `workspan session toggle` starts when nothing is open and stops
 what is open. The Omarchy menu already carries both paths: **Start / stop tracking**
@@ -48,18 +48,26 @@ The popup's activity field is that same note: one line, at most 200 characters, 
 the person - the ledger's only free text. **Save note** files it to the session it was
 typed in, without stopping that session; **Clock out** closes the session and sends the
 field as its closing note; **Stop** is the plain stop and never sends it; **Clock in**
-starts a session without touching the field, so a draft stays pinned to its original
-session and the field keeps its text. Apart from **Discard draft**, the field clears
-only after the daemon accepts the command - a failed or busy command keeps the text.
+runs the same `session start` action as **Start session**, next to the draft for
+convenience, without touching the field. A draft stays pinned to its original session.
+Only **Save note** and **Clock out** can clear a submitted draft after the daemon
+accepts it; **Start session**, **Clock in** and **Stop** never clear it. A failed or
+busy command keeps the text; **Discard draft** is the explicit local removal.
+Pause/Resume names the displayed session; the daemon refuses a stale target rather
+than pausing or resuming a session started by another client.
 A draft whose session has since stopped or switched still belongs to that session: the
 popup says so, Save note names that session explicitly, and it never rides along with
-a different session's clock out or clock in. Enter saves a note and never clocks in;
-Escape hands the keys back to the panel without clearing anything.
+a different session's clock out or clock in. Enter saves a note and never starts a
+session; an empty/whitespace-only field makes Enter and **Save note** no-ops, while
+**Clock out** still stops without a note. Surrounding whitespace is trimmed, matching
+the daemon's note contract. Escape hands keys back to the panel without clearing.
 Save note sends the activity after the CLI's `--` delimiter; Clock out's closing note
 travels as the value consumed by `--note` instead. Both keep text such as `--session`
-or `--idle` as text rather than reading it as a flag - which would either retarget the
-note or mark attendance; from a terminal,
-`workspan note --session <id> -- "--idle"` saves that literal note.
+or `--idle` as text rather than reading it as a flag. From a terminal,
+`workspan note --session <id> -- "--idle"` saves that literal note without retargeting
+it to an idle stretch; `workspan session stop --session <id> --note "--idle"` stops
+the named session with the same literal closing note. Use either `--note <text>` or
+`-- <text>` for a closing note, not both; bare trailing words are refused.
 Attribution stays the company picker: nothing is inferred from what you type.
 - A "not counted" caption: when no measure covers half an hour or more of the day,
   the popup says how much. It is the review list from `workspan day` - nothing was

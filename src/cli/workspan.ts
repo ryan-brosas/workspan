@@ -42,31 +42,31 @@ let delimiter = -1;
 let missingValue = "";
 /** Leading-dash tokens that are neither options nor booleans: a typo, or the
  *  note command's documented free text. */
-const unknownFlags: string[] = [];
+const unknownFlags: Array<{ name: string; at: number }> = [];
 for (let i = 0; i < args.length; i++) {
   if (delimiter !== -1) { tokens.push("word"); positional.push(args[i]); positionalAt.push(i); continue; }
   if (args[i] === "--") { delimiter = i; tokens.push("delimiter"); continue; }
   if (FLAGS.has(args[i])) {
     // A value-taking option with no value must error, not become a silent
     // boolean: "session stop --session" otherwise stops whatever is open.
-    if (args[i + 1] === undefined) { missingValue = args[i]; tokens.push("flag"); present.add(args[i]); continue; }
+    if (args[i + 1] === undefined) { missingValue = args[i]; tokens.push("flag"); continue; }
     optionValues.set(args[i], [...(optionValues.get(args[i]) ?? []), args[i + 1]]);
     present.add(args[i]);
     tokens.push("flag", "value");
     i++;
     continue;
   }
-  if (args[i].startsWith("--")) {
-    present.add(args[i]);
+  if (args[i].startsWith("-") && args[i] !== "-") {
     tokens.push("flag");
-    if (!BOOLEANS.has(args[i])) unknownFlags.push(args[i]);
+    if (BOOLEANS.has(args[i])) present.add(args[i]);
+    else unknownFlags.push({ name: args[i], at: i });
     continue;
   }
   tokens.push("word"); positional.push(args[i]); positionalAt.push(i);
 }
 const flags = (name: string): string[] => optionValues.get(name) ?? [];
 const flag = (name: string): string | undefined => optionValues.get(name)?.[0];
-/** A boolean's presence, read from the canonical parse: a consumed value is not a flag. */
+/** Option presence, read from the canonical parse: a consumed value is not a flag. */
 const has = (name: string): boolean => present.has(name);
 const socketFile = flag("--socket") ?? defaultSocket();
 
@@ -129,8 +129,12 @@ async function main(): Promise<number> {
   // impose the client's typo/missing-value rules on `daemon`; every other
   // command keeps them.
   const forwarding = group === "daemon";
-  if (missingValue && !forwarding) throw new Error(`option ${missingValue} requires a value`);
-  if (group !== "note" && !forwarding && unknownFlags.length) throw new Error(`unknown option ${unknownFlags[0]}`);
+  if (missingValue && !forwarding) {
+    if (group === "note" && missingValue !== "--session" && missingValue !== "--socket") throw new Error(`workspan note does not take ${missingValue}; put it after -- to keep it in the note`);
+    throw new Error(`option ${missingValue} requires a value`);
+  }
+  const unknown = unknownFlags.find(token => group !== "note" || token.at < positionalAt[0]);
+  if (!forwarding && unknown) throw new Error(`unknown option ${unknown.name}`);
   if (group === "health") { console.log(JSON.stringify(await request("health"), null, 2)); return 0; }
   if (group === "daemon") {
     // The foreground daemon, as the packaged unit starts it. The daemon owns this
@@ -237,8 +241,8 @@ async function main(): Promise<number> {
     console.log(JSON.stringify(result, null, 2));
     return 0;
   }
-  if (group === "session" && action === "pause") { console.log(JSON.stringify(await request("session.pause", moment()), null, 2)); return 0; }
-  if (group === "session" && action === "resume") { console.log(JSON.stringify(await request("session.resume", moment()), null, 2)); return 0; }
+  if (group === "session" && action === "pause") { console.log(JSON.stringify(await request("session.pause", { session: flag("--session"), ...moment() }), null, 2)); return 0; }
+  if (group === "session" && action === "resume") { console.log(JSON.stringify(await request("session.resume", { session: flag("--session"), ...moment() }), null, 2)); return 0; }
   if (group === "session" && action === "switch") {
     const { params, origin } = await sessionParams();
     const result = (await request("session.switch", params)) as SessionResult;
@@ -262,6 +266,9 @@ async function main(): Promise<number> {
     // The delimiter is advertised as the way literal text travels: a stop with
     // free text after "--" files it as the closing note instead of dropping it.
     const free = delimiter !== -1 && delimiter + 1 < args.length ? args.slice(delimiter + 1).join(" ") : "";
+    if (positionalAt.slice(2).some(at => delimiter === -1 || at < delimiter)) throw new Error("put closing-note text after -- or use --note <text>");
+    if (explicit !== undefined && free !== "") throw new Error("choose --note or -- <text>, not both");
+    if (flags("--note").length > 1 || flags("--session").length > 1) throw new Error("session stop accepts each --note and --session only once");
     const note = explicit !== undefined ? explicit : (free === "" ? undefined : free);
     console.log(JSON.stringify(await request("session.stop", { session: flag("--session"), ...(note !== undefined ? { note } : {}), ...moment() }), null, 2));
     return 0;
@@ -275,6 +282,9 @@ async function main(): Promise<number> {
     // starts free text. A note is not an option, so an unknown leading-dash word
     // like "--debugged the parser" stays the person's words; a recognized flag is
     // structure, never speech, and a consumed "--idle" does not refile the note.
+    for (const name of ["--session", "--socket"]) {
+      if (flags(name).length > 1) throw new Error(`workspan note accepts ${name} only once; put literal text after --`);
+    }
     const start = positionalAt[0] + 1;
     const words: string[] = [];
     for (let i = start; i < args.length; i++) {
@@ -289,6 +299,7 @@ async function main(): Promise<number> {
         continue;
       }
       if (args[i] === "--idle") continue;
+      if (BOOLEANS.has(args[i])) throw new Error(`workspan note does not take ${args[i]}; put it after -- to keep it in the note`);
       words.push(args[i]);
     }
     const text = words.join(" ");
@@ -321,7 +332,7 @@ async function main(): Promise<number> {
   if (group === "day" || group === "week") {
     const exported = flag("--export");
     if (has("--export") && exported !== "csv" && exported !== "md") throw new Error("--export must be csv or md");
-    if (exported && has("--json")) throw new Error("choose --json or --export, not both");
+    if (has("--export") && has("--json")) throw new Error("choose --json or --export, not both");
     const format = has("--json") ? "json" : exported ?? "text";
     const text = await readReport({ period: group, format: format as "text" | "json" | "csv" | "md", ...(flag("--date") ? { date: flag("--date") } : {}), ...(flag("--tz") ? { timezone: flag("--tz") } : {}) }, request);
     // A pipe write is asynchronous: exiting before the callback would truncate a
@@ -496,7 +507,7 @@ async function main(): Promise<number> {
     await new Promise<void>(resolve => { process.stdout.write("", () => resolve()); });
     return 0;
   }
-  throw new Error("usage: workspan daemon|status|engine [--check]|health|doctor [--json]|mcp|ingest --file f.jsonl|ingest --stdin|ingest-codex [--since-days N] [--dry-run]|harness|ingest-harness [--id X] [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl [--require-clean]|projects|signals|migrate --chunks f.jsonl --target db [--tracker-db pi.sqlite] [--map scope=project] [--apply]|session start|pause|resume|switch|toggle --project P [--at HH:MM|ISO|ms]|session stop [--session S] [--note <text>] [-- <text>]|note [--session S | --idle] [--] <text>|day|week [--date YYYY-MM-DD] [--tz ZONE] [--json|--export csv|md]|backup [--keep N]");
+  throw new Error("usage: workspan daemon|status|engine [--check]|health|doctor [--json]|mcp|ingest --file f.jsonl|ingest --stdin|ingest-codex [--since-days N] [--dry-run]|harness|ingest-harness [--id X] [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl [--require-clean]|projects|signals|migrate --chunks f.jsonl --target db [--tracker-db pi.sqlite] [--map scope=project] [--apply]|session start|switch|toggle --project P [--at HH:MM|ISO|ms]|session pause|resume [--session S] [--at HH:MM|ISO|ms]|session stop [--session S] [--at HH:MM|ISO|ms] [--note <text>] [-- <text>]|session pick|list|session remove --session S --reason <why>|projects confirm <root> [project]|projects bind <root> <project> [--explicit]|note [--session S | --idle] [--] <text>|day|week [--date YYYY-MM-DD] [--tz ZONE] [--json|--export csv|md]|backup [--keep N]");
 }
 
 main().then(code => process.exit(code)).catch((error: unknown) => {

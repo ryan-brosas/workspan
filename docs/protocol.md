@@ -46,7 +46,7 @@ before it depends on a newer field.
 | `engine` | - | the accounting engine identity and a live probe | - |
 | `session.start` | `project?`, `root?`, `at?` | `{ receipt, session, key, project, root, started_at, corrected? }` | `session_open`, `bad_request` |
 | `session.stop` | `session?`, `note?`, `at?` | `{ receipt, session, key, stopped_at, note?, corrected? }` | `no_open_session`, `no_such_session`, `session_removed`, `bad_request` |
-| `session.pause` / `session.resume` | `at?` | `{ receipt, session, state, unchanged? }` | `no_open_session`, `bad_request` |
+| `session.pause` / `session.resume` | `session?` (must still be the active session), `at?` | `{ receipt, session, state, unchanged? }` | `no_open_session`, `session_changed`, `bad_request` |
 | `session.toggle` | `project?`, `root?` | `{ receipt, action, session }` | `bad_request` |
 | `session.switch` | `project?`, `root?` | `{ receipts, closed, session, project, root }` | `bad_request` |
 | `session.note` | `note`, `session?`, `idle?` | `{ note, session, project, idle? }` | `no_open_session`, `no_such_session`, `session_removed`, `no_idle_stretch`, `no_covering_session`, `bad_request` |

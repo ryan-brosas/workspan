@@ -6,7 +6,7 @@ import { WorkspanStore } from "../src/daemon/db.ts";
 import { startDaemon, type Daemon } from "../src/daemon/server.ts";
 import { validateEvent } from "../src/daemon/evidence.ts";
 
-interface CliResult { code: number | null; stdout: string; stderr: string }
+interface CliResult { code: number; stdout: string; stderr: string; args: string[] }
 
 /** Exactly the argv the bar widget builds: [cliPath, "--socket", socketPath, ...].
  *  One helper parameterized by socket directory, so the spawn plumbing lives in
@@ -15,15 +15,15 @@ function cliAt(dir: string) {
   return async (...args: string[]): Promise<CliResult> => {
     const proc = Bun.spawn([process.execPath, join(import.meta.dir, "../src/cli/workspan.ts"), "--socket", join(dir, "workspan.sock"), ...args], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
-    return { code: await proc.exited, stdout, stderr };
+    return { code: await proc.exited, stdout, stderr, args };
   };
 }
 
 /** Parse JSON only after a clean exit: a refusal then surfaces the CLI's stderr
  *  instead of failing as an opaque JSON parse error. */
 async function json<T>(result: Promise<CliResult>): Promise<T> {
-  const { code, stdout, stderr } = await result;
-  if (code !== 0) throw new Error(`workspan exited with ${code}: ${stderr.trim() || stdout.trim()}`);
+  const { code, stdout, stderr, args } = await result;
+  if (code !== 0) throw new Error(`workspan ${JSON.stringify(args)} exited with ${code}: ${stderr.trim() || stdout.trim()}`);
   return JSON.parse(stdout) as T;
 }
 
@@ -94,7 +94,7 @@ test("the draft paths: previous-session notes, leading-dash words, one line only
     // A note is not a flag: leading dashes stay the words of the person.
     expect((await send("note", "--debugged the parser", "--session", started.session)).code).toBe(0);
     // Literal notes must never become targeting, socket or idle flags.
-    const literalNotes = ["--session", "--socket", "--idle", "--at", "--", "note"];
+    const literalNotes = ["--session", "--socket", "--idle", "--at", "--", "note", "--json", "--explicit"];
     for (const note of literalNotes) {
       expect((await send("note", "--session", started.session, "--", note)).code).toBe(0);
     }
@@ -112,13 +112,15 @@ test("the draft paths: previous-session notes, leading-dash words, one line only
     // note: the session named explicitly decides, not whatever is open. The
     // stopped session from above is the explicit target while a fresh session B
     // is open, so a fallback to the open session would file the note wrong.
+    const expectedNotes = [...row!.notes];
     for (const note of ["--reason", "--id", "--session", "--"]) {
       const next = await json<{ session: string }>(send("session", "start"));
       expect((await send("note", "--session", started.session, "--", note)).code).toBe(0);
       const day = await json<typeof facts>(send("day", "--json"));
       const target = day.days.flatMap(day => day.sessions).find(session => session.session === started.session);
       const open = day.days.flatMap(day => day.sessions).find(session => session.session === next.session);
-      expect(target!.notes).toContain(note);
+      expectedNotes.push(note);
+      expect(target!.notes).toEqual(expectedNotes);
       expect(open!.notes).not.toContain(note);
       expect((await send("session", "stop", "--session", next.session)).code).toBe(0);
     }
@@ -139,6 +141,38 @@ test("the draft paths: previous-session notes, leading-dash words, one line only
     const afterShift = await json<typeof facts>(send("day", "--json"));
     const shifted = afterShift.days.flatMap(day => day.sessions).find(session => session.session === named.session);
     expect(shifted!.notes).toEqual(["kept"]);
+
+    // Refuse ambiguity and malformed options before either adding a note or stopping.
+    for (const [argv, message] of [
+      [["note", "--session", named.session, "fixed", "--session", "bug"], "only once"],
+      [["note", "--socket", "ignored", "fixed"], "only once"],
+      [["note", "fixed", "--at"], "put it after --"],
+      [["note", "--json", "hello"], "does not take --json"],
+      [["note", "--check"], "does not take --check"],
+      [["--debugged", "note", "fixed"], "unknown option"],
+      [["day", "-json"], "unknown option"],
+      [["session", "stop", "--note", "one", "--", "two"], "not both"],
+      [["session", "stop", "forgot", "delimiter"], "put closing-note text after --"],
+      [["session", "stop", "--note", "one", "--note", "two"], "only once"],
+    ] as const) {
+      const refused = await send(...argv);
+      expect(refused.code, JSON.stringify(argv)).not.toBe(0);
+      expect(refused.stderr, JSON.stringify(argv)).toContain(message);
+    }
+    expect((await json<{ current_session: { session: string } }>(send("status"))).current_session.session).toBe(named.session);
+
+    // Pause/resume compare against the displayed session atomically in the daemon.
+    for (const action of ["pause", "resume"]) {
+      const refused = await send("session", action, "--session", started.session);
+      expect(refused.code).not.toBe(0);
+      expect(refused.stderr).toContain("session_changed");
+      expect((await json<{ current_session: { state: string } }>(send("status"))).current_session.state).toBe("running");
+    }
+    expect((await send("session", "pause", "--session", named.session)).code).toBe(0);
+    const wrongResume = await send("session", "resume", "--session", started.session);
+    expect(wrongResume.stderr).toContain("session_changed");
+    expect((await json<{ current_session: { state: string } }>(send("status"))).current_session.state).toBe("paused");
+    expect((await send("session", "resume", "--session", named.session)).code).toBe(0);
 
     // A stop's free text after the real delimiter is its closing note, never
     // silently dropped: the delimiter protects literal text for stop too.
@@ -215,9 +249,9 @@ test("a consumed flag value never becomes a note option or the text delimiter", 
     expect(idleNote.idle).toBeUndefined();
     expect(idleNote.note.text).toBe("consumed-idle");
 
-    // The first "--" is consumed as the value of "--socket", so it is not the
-    // delimiter. Only the final unconsumed "--" starts the person's free text.
-    const delimiterValue = await send("note", "--socket", "--", "--session", open.session, "--", "delimiter-text");
+    // The first "--" is a consumed project value, not the delimiter.
+    // This does not depend on duplicate socket-option precedence.
+    const delimiterValue = await send("--project", "--", "note", "--session", open.session, "--", "delimiter-text");
     expect(delimiterValue.code).toBe(0);
     const delimiterNote = JSON.parse(delimiterValue.stdout) as { session: string; note: { text: string } };
     expect(delimiterNote.session).toBe(open.session);
@@ -243,42 +277,47 @@ test("the packaged daemon argv reaches the daemon entry point and starts", async
   // flags and --no-harness. Testing startDaemon() directly cannot catch an
   // outer parser that rejects those flags, so spawn the real CLI and wait for
   // the entry point's own listening announcement.
-  const proc = Bun.spawn([
-    process.execPath, join(import.meta.dir, "../src/cli/workspan.ts"),
-    "daemon", "--foreground",
-    "--db", db,
-    "--runtime-dir", runtimeDir,
-    "--spool-dir", spoolDir,
-    "--idle-gap-ms", "900000",
-    "--status-interval-ms", "60000",
-    "--harness-window-ms", "604800000",
-    "--no-harness",
-  ], { stdout: "pipe", stderr: "pipe" });
+  let proc: Bun.Subprocess<"ignore", "pipe", "pipe"> | null = null;
+  let drainErr: Promise<void> | null = null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const decoderOut = new TextDecoder();
   const decoderErr = new TextDecoder();
   let stdout = "";
   let stderr = "";
-  const drainErr = (async () => { for await (const chunk of proc.stderr as ReadableStream<Uint8Array>) stderr += decoderErr.decode(chunk as Uint8Array, { stream: true }); })();
   try {
+    proc = Bun.spawn([
+      process.execPath, join(import.meta.dir, "../src/cli/workspan.ts"),
+      "daemon", "--foreground",
+      "--db", db,
+      "--runtime-dir", runtimeDir,
+      "--spool-dir", spoolDir,
+      "--idle-gap-ms", "900000",
+      "--status-interval-ms", "60000",
+      "--harness-window-ms", "604800000",
+      "--no-harness",
+    ], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const running = proc;
+    drainErr = (async () => { for await (const chunk of running.stderr) stderr += decoderErr.decode(chunk, { stream: true }); })();
     const announced = await Promise.race([
       (async () => {
-        for await (const chunk of proc.stdout as ReadableStream<Uint8Array>) {
+        for await (const chunk of running.stdout) {
           stdout += decoderOut.decode(chunk as Uint8Array, { stream: true });
           const newline = stdout.indexOf("\n");
           if (newline !== -1) return JSON.parse(stdout.slice(0, newline)) as { listening: string; status: string; database: string };
         }
         throw new Error(`daemon stdout ended before it announced listening: ${stderr || stdout}`);
       })(),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`daemon did not announce listening within 10s: ${stderr || stdout}`)), 10_000)),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`daemon did not announce listening within 10s: ${stderr || stdout}`)), 10_000); }),
     ]);
     expect(announced.database).toBe(db);
     expect(announced.listening).toContain("workspan.sock");
     expect(announced.status).toContain("status.json");
     expect(existsSync(join(runtimeDir, "workspan.sock"))).toBe(true);
   } finally {
-    proc.kill("SIGTERM");
-    await proc.exited;
-    await drainErr;
-    rmSync(root, { recursive: true, force: true });
+    clearTimeout(timer);
+    try {
+      if (proc) { proc.kill("SIGTERM"); await proc.exited; }
+      await drainErr;
+    } finally { rmSync(root, { recursive: true, force: true }); }
   }
 });

@@ -325,6 +325,9 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       case "session.pause": {
         const open = store.openSession();
         if (!open) throw new ProtocolError("no_open_session", "nothing is running");
+        // Optional compare-and-act: a stale widget must not pause/resume a new session.
+        const requested = (params as { session?: unknown } | null)?.session;
+        if (requested !== undefined && requested !== open.session) throw new ProtocolError("session_changed", "the displayed session is no longer active");
         if (open.state === "paused") return ok(id, { session: open.session, state: "paused", unchanged: true });
         const when = moment(params);
         if (when.at < open.startedAt) throw new ProtocolError("bad_request", "a pause cannot be recorded before the session started");
@@ -335,6 +338,9 @@ export async function startDaemon(options: DaemonOptions): Promise<Daemon> {
       case "session.resume": {
         const open = store.openSession();
         if (!open) throw new ProtocolError("no_open_session", "nothing is running");
+        // Optional compare-and-act: a stale widget must not pause/resume a new session.
+        const requested = (params as { session?: unknown } | null)?.session;
+        if (requested !== undefined && requested !== open.session) throw new ProtocolError("session_changed", "the displayed session is no longer active");
         if (open.state === "running") return ok(id, { session: open.session, state: "running", unchanged: true });
         const when = moment(params);
         if (when.at < open.startedAt) throw new ProtocolError("bad_request", "a resume cannot be recorded before the session started");

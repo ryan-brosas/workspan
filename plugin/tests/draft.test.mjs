@@ -5,7 +5,7 @@ import test from "node:test"
 
 // Draft.js is a QML library; here it is evaluated with an explicit export list so
 // the same source is testable without QML.
-const source = fs.readFileSync(new URL("../Draft.js", import.meta.url), "utf8").replace(/^\.pragma library\s*/, "")
+const source = fs.readFileSync(new URL("../Draft.js", import.meta.url), "utf8").replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/^\s*\.pragma\s+library[^\n]*\n?/m, "")
 // A fresh vm context already provides the standard intrinsics, so the sandbox
 // only needs the export target: injecting host constructors would make any
 // instanceof check inside Draft.js compare against the wrong realm.
@@ -25,7 +25,7 @@ test("a draft belongs to the session it was first typed in", () => {
 
 test("Save note names its session explicitly", () => {
   assert.deepEqual(argv(D.noteArgv("  wrap up  ", "s1")), ["note", "--session", "s1", "--", "wrap up"])
-  for (const text of ["--session", "--socket", "--idle", "--"]) {
+  for (const text of ["--session", "--socket", "--idle", "--at", "--explicit", "--"]) {
     assert.deepEqual(argv(D.noteArgv(text, "s1")), ["note", "--session", "s1", "--", text])
   }
   assert.equal(D.noteArgv("   ", "s1"), null, "whitespace is no note")
@@ -44,6 +44,8 @@ test("Clock out carries a flag-like or padded note verbatim", () => {
   assert.deepEqual(argv(D.clockOutArgv("  auth work  ", "s1", "s1")), ["session", "stop", "--session", "s1", "--note", "auth work"])
   assert.equal(D.clockOutConsumesDraft("--socket", "s1", "s1"), true, "a real draft rides with its own session")
   assert.equal(D.clockOutConsumesDraft("", "s1", "s1"), false, "no draft, no note")
+  assert.equal(D.clockOutConsumesDraft("   ", "s1", "s1"), false)
+  assert.deepEqual(argv(D.clockOutArgv("   ", "s1", "s1")), ["session", "stop", "--session", "s1"])
   assert.equal(D.clockOutConsumesDraft("work", "s1", "s2"), false, "a stale draft does not ride along")
 })
 

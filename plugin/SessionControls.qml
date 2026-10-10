@@ -45,7 +45,9 @@ FocusScope {
     // the submitted draft instead of leaving a snapshot no exit will ever settle.
     inFlight = true
     pendingDraft = pending
-    if (!dispatch(args)) {
+    var accepted = false
+    try { accepted = dispatch(args) } catch (_) { accepted = false }
+    if (!accepted) {
       inFlight = false
       pendingDraft = null
       return false
@@ -56,6 +58,7 @@ FocusScope {
   // The host calls this when the CLI exits. Failures keep the draft; a success
   // clears only the exact draft that was submitted.
   function completeCommand(success) {
+    if (!inFlight) return
     inFlight = false
     var submitted = pendingDraft
     pendingDraft = null
@@ -118,7 +121,7 @@ FocusScope {
         foreground: root.foreground
         fontFamily: root.fontFamily
         enabled: root.available
-        onClicked: root.submit(["session", root.paused ? "resume" : "pause"], false)
+        onClicked: root.submit(["session", root.paused ? "resume" : "pause", "--session", root.session], false)
       }
 
       Button {
@@ -146,7 +149,7 @@ FocusScope {
 
     Text {
       width: parent.width
-      text: "Manual activity - optional, one line, at most 200 characters"
+      text: "Manual activity - optional, one line, at most " + activityField.maximumLength + " characters"
       textFormat: Text.PlainText
       color: root.foreground
       font.family: root.fontFamily

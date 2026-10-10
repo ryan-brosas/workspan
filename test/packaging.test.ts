@@ -1,22 +1,31 @@
 import { afterAll, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+const repoRoot = join(import.meta.dir, "..");
+
 /** The package, the plugin manifest and the release tag must not drift apart. */
 test("the plugin manifest version matches the package version", () => {
-  const root = join(import.meta.dir, "..");
-  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version?: unknown };
-  const manifest = JSON.parse(readFileSync(join(root, "plugin", "manifest.json"), "utf8")) as { version?: unknown };
+  const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as { version?: unknown };
+  const manifest = JSON.parse(readFileSync(join(repoRoot, "plugin", "manifest.json"), "utf8")) as { version?: unknown };
   expect(typeof pkg.version).toBe("string");
   expect(manifest.version).toBe(pkg.version);
 });
 
 /** The installer must reach a task-owned HOME and report every outcome by status. */
-const repoRoot = join(import.meta.dir, "..");
 const INSTALLED = join(".config", "omarchy", "plugins", "workspan.tracker");
-const installerFiles = ["manifest.json", "Panel.qml", "SessionControls.qml", "Draft.js", "Workspan.js", "README.md"];
+// Top-level plugin files are the package; the tests/ directory is not shipped.
+const installerFiles = readdirSync(join(repoRoot, "plugin"), { withFileTypes: true }).filter(entry => entry.isFile()).map(entry => entry.name).sort();
+
+test("the release copy list covers every plugin file", () => {
+  const release = readFileSync(join(repoRoot, ".github/workflows/release.yml"), "utf8");
+  const line = release.split("\n").find(line => /^\s*cp plugin\//.test(line));
+  expect(line).toBeDefined();
+  const copied = [...line!.matchAll(/plugin\/([^\s]+)/g)].map(match => match[1]).sort();
+  expect(copied).toEqual(installerFiles);
+});
 const scratch = mkdtempSync(join(tmpdir(), "workspan-install-plugin-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
@@ -39,6 +48,8 @@ function installIn(home: string, ...args: string[]): number {
       XDG_CACHE_HOME: join(home, ".cache"),
     },
     encoding: "utf8",
+    timeout: 30_000,
+    stdio: ["ignore", "pipe", "pipe"],
   });
   if (result.error) throw result.error;
   lastInstallOutput = `${result.stdout ?? ""}${result.stderr ?? ""}`;
@@ -47,11 +58,8 @@ function installIn(home: string, ...args: string[]): number {
 
 /** The installer's ZIP path already depends on a host unzip; the test builds
  *  the archive with the matching host zip. Probe that prerequisite once, so a
- *  machine without it gets a named message instead of an opaque spawn ENOENT.
- *  The original review allowed either an in-process writer or this probe; the
- *  in-process writer was ~80 lines of ZIP format code kept only for this
- *  fixture, and the installer reads ZIPs with host tools anyway. */
-const hasZip = spawnSync("zip", ["-v"], { stdio: "ignore" }).status === 0;
+ *  machine without it gets a named message instead of an opaque spawn ENOENT. */
+const hasZip = spawnSync("zip", ["-v"], { stdio: "ignore", timeout: 5_000 }).status === 0;
 
 /** A release-shaped ZIP whose workspan.tracker/ holds exactly the named plugin
  *  files, built with host zip and read back by the installer's own unzip. */
@@ -60,7 +68,7 @@ function packageZip(zipPath: string, names: string[]): void {
   const pkgDir = join(dir, "workspan.tracker");
   mkdirSync(pkgDir);
   for (const name of names) copyFileSync(join(repoRoot, "plugin", name), join(pkgDir, name));
-  const zipped = spawnSync("zip", ["-q", "-r", zipPath, "workspan.tracker"], { cwd: dir, encoding: "utf8" });
+  const zipped = spawnSync("zip", ["-q", "-r", zipPath, "workspan.tracker"], { cwd: dir, encoding: "utf8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
   if (zipped.error) throw zipped.error;
   if (zipped.status !== 0) throw new Error("zip failed (" + zipped.status + "): " + (zipped.stderr ?? ""));
 }
