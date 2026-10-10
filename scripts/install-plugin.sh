@@ -31,7 +31,9 @@ while [ "$#" -gt 0 ]; do
 done
 
 work=""
-cleanup() { [ -n "$work" ] && rm -rf "$work"; }
+# The EXIT trap's status becomes the script's status under `set -e`, so an empty
+# work dir (every run without --from) must still leave a success, not a failed test.
+cleanup() { [ -z "$work" ] || rm -rf "$work"; }
 trap cleanup EXIT
 
 if [ -n "$from" ]; then

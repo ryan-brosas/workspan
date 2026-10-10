@@ -15,6 +15,7 @@ const argv = (value) => value === null ? null : Array.from(value)
 
 test("a draft belongs to the session it was first typed in", () => {
   assert.equal(D.draftSessionFor("", "s1", "s2"), "", "a cleared draft releases its session")
+  assert.equal(D.draftSessionFor("   ", "s1", "s2"), "", "whitespace is no draft, so it pins no session")
   assert.equal(D.draftSessionFor("work", "", "s1"), "s1", "the first keystroke pins the running session")
   assert.equal(D.draftSessionFor("more", "s1", "s2"), "s1", "a switch never steals the draft")
 })

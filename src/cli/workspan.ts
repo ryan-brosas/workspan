@@ -16,27 +16,42 @@ import { parseMoment } from "./moment.ts";
 
 const args = process.argv.slice(2);
 const FLAGS = new Set(["--socket", "--project", "--root", "--session", "--file", "--db", "--since-days", "--since-hours", "--limit", "--instance", "--turns", "--chunks", "--target", "--map", "--tracker-db", "--at", "--date", "--tz", "--export", "--keep", "--note", "--reason", "--id"]);
-/** A flag's value is the token right after it, even when that value itself looks
+/** One canonical read of argv, so option values, booleans, positionals and the
+ *  real free-text delimiter can never disagree about which token is which. A
+ *  flag's value is the token right after it, even when that value itself looks
  *  like a flag, and the first occurrence wins - the order the widget already
- *  sends: socket first, then session, then the note. "--" ends option parsing:
- *  what follows is free text and never an option, so a note of "--session"
- *  cannot retarget the note or borrow the socket. */
-const optionValues = (() => {
-  const values = new Map<string, string[]>();
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--") break;
-    if (FLAGS.has(args[i]) && args[i + 1] !== undefined) { values.set(args[i], [...(values.get(args[i]) ?? []), args[i + 1]]); i++; }
+ *  sends: socket first, then session, then the note. The first "--" that is not
+ *  itself a consumed value ends option parsing: what follows is free text and
+ *  never an option, so a note of "--session" cannot retarget the note or borrow
+ *  the socket. A consumed "--idle" is a value, not the idle flag. */
+type TokenKind = "flag" | "value" | "delimiter" | "word";
+const tokens: TokenKind[] = [];
+const optionValues = new Map<string, string[]>();
+/** Names that appear as options on their own, never consumed as someone's value. */
+const present = new Set<string>();
+const positional: string[] = [];
+/** Where each positional token sits in argv. A command that scans words reads
+ *  them from its own positional token, never from the first token in the line
+ *  that happens to spell the same word - an option value of "note" is a value. */
+const positionalAt: number[] = [];
+let delimiter = -1;
+for (let i = 0; i < args.length; i++) {
+  if (delimiter !== -1) { tokens.push("word"); positional.push(args[i]); positionalAt.push(i); continue; }
+  if (args[i] === "--") { delimiter = i; tokens.push("delimiter"); continue; }
+  if (FLAGS.has(args[i]) && args[i + 1] !== undefined) {
+    optionValues.set(args[i], [...(optionValues.get(args[i]) ?? []), args[i + 1]]);
+    present.add(args[i]);
+    tokens.push("flag", "value");
+    i++;
+    continue;
   }
-  return values;
-})();
+  if (args[i].startsWith("--")) { present.add(args[i]); tokens.push("flag"); continue; }
+  tokens.push("word"); positional.push(args[i]); positionalAt.push(i);
+}
 const flags = (name: string): string[] => optionValues.get(name) ?? [];
 const flag = (name: string): string | undefined => optionValues.get(name)?.[0];
-const positional: string[] = [];
-for (let i = 0; i < args.length; i++) {
-  if (FLAGS.has(args[i])) { i++; continue; }
-  if (args[i].startsWith("--")) continue;
-  positional.push(args[i]);
-}
+/** A boolean's presence, read from the canonical parse: a consumed value is not a flag. */
+const has = (name: string): boolean => present.has(name);
 const socketFile = flag("--socket") ?? defaultSocket();
 
 /** A stated correction moment. The daemon speaks epoch milliseconds; the person does not. */
@@ -120,11 +135,11 @@ async function main(): Promise<number> {
     const root = positional[2];
     const project = positional[3];
     if (!root || !project) throw new Error("usage: workspan projects bind <root> <project> [--explicit]");
-    const { bindings } = await request("projects.bind", { root, project, explicit: args.includes("--explicit") }) as { bindings: Array<{ root: string; project: string; explicit: boolean; source: string }> };
+    const { bindings } = await request("projects.bind", { root, project, explicit: has("--explicit") }) as { bindings: Array<{ root: string; project: string; explicit: boolean; source: string }> };
     for (const binding of bindings) console.log(`${binding.explicit ? "explicit " : "provisional"}  ${binding.project.padEnd(28)} ${binding.root}  (${binding.source})`);
     return 0;
   }
-  if (group === "projects" && args.includes("--json")) {
+  if (group === "projects" && has("--json")) {
     const { bindings } = await request("projects") as { bindings: Array<{ root: string; project: string; explicit: boolean; source: string }> };
     console.log(JSON.stringify(bindings));
     return 0;
@@ -139,7 +154,7 @@ async function main(): Promise<number> {
   if (group === "engine") {
     const report = await request("engine") as { engine: Record<string, unknown>; check: { ok: boolean; expected: number; reported: number } };
     console.log(JSON.stringify(report, null, 2));
-    if (args.includes("--check") && !report.check.ok) return 1;
+    if (has("--check") && !report.check.ok) return 1;
     return 0;
   }
   // An explicit project wins; an explicit root is second best; otherwise the hit
@@ -224,28 +239,27 @@ async function main(): Promise<number> {
     // One command while the session is open; --note on stop covers the common case.
     // --session attaches to a past session, and --idle attaches to the session the
     // last finished seat-idle stretch happened in - what the popup nudge asks for.
-    // The words are scanned from the tokens after the group: a note is not a flag,
-    // so "--debugged the parser" stays the person's words instead of vanishing.
-    const start = args.indexOf("note") + 1;
-    // The widget sends the note after "--", so its words are never options; a
-    // person whose activity is literally "--idle" must not have it read as the
-    // flag that refiles the note onto an idle stretch.
-    const end = args.indexOf("--", start);
-    const options = end === -1 ? args : args.slice(0, end);
+    // The words are the canonical parse's words: the group is its own positional
+    // token, a consumed value is never text, and only the first unconsumed "--"
+    // starts free text. A note is not an option, so an unknown leading-dash word
+    // like "--debugged the parser" stays the person's words; a recognized flag is
+    // structure, never speech, and a consumed "--idle" does not refile the note.
+    const start = positionalAt[0] + 1;
     const words: string[] = [];
-    for (let i = start; i < (end === -1 ? args.length : end); i++) {
-      if (args[i] === "--idle") continue;
-      if (args[i] === "--session" || args[i] === "--socket") { i++; continue; }
+    for (let i = start; i < args.length; i++) {
+      if (i === delimiter) continue;
+      if (delimiter !== -1 && i > delimiter) { words.push(args[i]); continue; }
+      if (tokens[i] === "value") continue;
+      if (tokens[i] === "flag" && (FLAGS.has(args[i]) || args[i] === "--idle")) continue;
       words.push(args[i]);
     }
-    if (end !== -1) words.push(...args.slice(end + 1));
     const text = words.join(" ");
     if (!text) throw new Error("usage: workspan note [--session S | --idle] [--] <what you did>");
     const target = flag("--session");
     console.log(JSON.stringify(await request("session.note", {
       note: text,
       ...(target !== undefined ? { session: target } : {}),
-      ...(options.includes("--idle") ? { idle: true } : {}),
+      ...(has("--idle") ? { idle: true } : {}),
     }), null, 2));
     return 0;
   }
@@ -267,9 +281,9 @@ async function main(): Promise<number> {
   }
   if (group === "day" || group === "week") {
     const exported = flag("--export");
-    if (args.includes("--export") && exported !== "csv" && exported !== "md") throw new Error("--export must be csv or md");
-    if (exported && args.includes("--json")) throw new Error("choose --json or --export, not both");
-    const format = args.includes("--json") ? "json" : exported ?? "text";
+    if (has("--export") && exported !== "csv" && exported !== "md") throw new Error("--export must be csv or md");
+    if (exported && has("--json")) throw new Error("choose --json or --export, not both");
+    const format = has("--json") ? "json" : exported ?? "text";
     const text = await readReport({ period: group, format: format as "text" | "json" | "csv" | "md", ...(flag("--date") ? { date: flag("--date") } : {}), ...(flag("--tz") ? { timezone: flag("--tz") } : {}) }, request);
     // A pipe write is asynchronous: exiting before the callback would truncate a
     // week of CSV or a JSON snapshot for whatever is reading it.
@@ -278,7 +292,7 @@ async function main(): Promise<number> {
   }
   if (group === "backup") {
     const raw = flag("--keep");
-    if (args.includes("--keep") && (raw === undefined || !/^[1-9]\d*$/.test(raw))) throw new Error("--keep must be a positive integer");
+    if (has("--keep") && (raw === undefined || !/^[1-9]\d*$/.test(raw))) throw new Error("--keep must be a positive integer");
     console.log(JSON.stringify(await request("backup", { ...(raw === undefined ? {} : { keep: Number(raw) }) }), null, 2));
     return 0;
   }
@@ -293,7 +307,7 @@ async function main(): Promise<number> {
     const report = auditReceipts({ turnsLog: turns, chunksLog: chunks, ...(flag("--instance") ? { label: flag("--instance")! } : {}) });
     console.log(JSON.stringify(report, null, 2));
     // The gate: a scope with unresolved rows is not fit to migrate yet.
-    if (args.includes("--require-clean") && report.review.length > 0) {
+    if (has("--require-clean") && report.review.length > 0) {
       console.error(`audit is not clean: ${report.review.length} receipt(s) need review`);
       return 1;
     }
@@ -315,8 +329,8 @@ async function main(): Promise<number> {
       targetDatabase: target,
       scopeMap,
       ...(flag("--tracker-db") ? { trackerDatabase: flag("--tracker-db")! } : {}),
-      apply: args.includes("--apply"),
-      allowLiveDatabase: args.includes("--allow-live-database"),
+      apply: has("--apply"),
+      allowLiveDatabase: has("--allow-live-database"),
       ...(flag("--instance") ? { instance: flag("--instance")! } : {}),
     });
     if (report.reconciliation && !(report.reconciliation.agent.equal && report.reconciliation.inferred.equal)) {
@@ -363,7 +377,7 @@ async function main(): Promise<number> {
     });
     const events = collected.flatMap(entry => entry.events);
     const readers = collected.map(entry => ({ id: entry.id, source: entry.source, ...entry.summary }));
-    if (args.includes("--dry-run")) {
+    if (has("--dry-run")) {
       console.log(JSON.stringify({ readers, events: events.length, dry_run: true, ingested: 0 }, null, 2));
       return 0;
     }
@@ -387,7 +401,7 @@ async function main(): Promise<number> {
     if (collected.summary.store === null) {
       console.error("codex: no local thread history store found - local Codex usage is unavailable, not zero");
     }
-    if (args.includes("--dry-run")) {
+    if (has("--dry-run")) {
       console.log(JSON.stringify({ ...collected.summary, dry_run: true, ingested: 0 }, null, 2));
       return 0;
     }
@@ -399,7 +413,7 @@ async function main(): Promise<number> {
     const file = flag("--file");
     // `--stdin` is how the collector ingest loop feeds evidence in: a pipe keeps the
     // collector free of any transport of its own.
-    const piped = args.includes("--stdin");
+    const piped = has("--stdin");
     if (!file && !piped) throw new Error("ingest needs --file <jsonl> or --stdin");
     const text = file ? readFileSync(file, "utf8") : readFileSync(0, "utf8");
     // Line by line, so a malformed record is named by position and the cause survives;
@@ -427,7 +441,7 @@ async function main(): Promise<number> {
     // its spool, the database file and every evidence source.
     const { runDoctor } = await import("./doctor.ts");
     const report = await runDoctor({ socketPath: socketFile });
-    if (args.includes("--json")) console.log(JSON.stringify(report, null, 2));
+    if (has("--json")) console.log(JSON.stringify(report, null, 2));
     else {
       for (const check of report.checks) console.log(`${check.state === "ok" ? "ok  " : check.state === "attention" ? "warn" : "?   "} ${check.name}: ${check.detail}`);
       console.log(`verdict: ${report.verdict}`);

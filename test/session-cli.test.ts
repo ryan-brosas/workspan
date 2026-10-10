@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorkspanStore } from "../src/daemon/db.ts";
 import { startDaemon, type Daemon } from "../src/daemon/server.ts";
+import { validateEvent } from "../src/daemon/evidence.ts";
 
 const root = mkdtempSync(join(tmpdir(), "workspan-session-cli-"));
 const runtimeDir = join(root, "run");
@@ -99,18 +100,91 @@ test("the draft paths: previous-session notes, leading-dash words, one line only
     for (const note of literalNotes) expect(row!.notes).toContain(note);
     expect(row!.notes.some(note => note.includes("two\nlines"))).toBe(false);
 
-    // Option values that look like flags (including the delimiter itself) stay
-    // values even when the real targeting flag follows the note.
-    for (const note of ["--session", "--"]) {
+    // Literal notes and option values that look like flags must never retarget a
+    // note: the session named explicitly decides, not whatever is open. The
+    // stopped session from above is the explicit target while a fresh session B
+    // is open, so a fallback to the open session would file the note wrong.
+    for (const note of ["--reason", "--id", "--session", "--"]) {
       const next = JSON.parse((await send("session", "start")).stdout) as { session: string };
-      const stopped = await send("session", "stop", "--note", note, "--session", next.session);
-      expect(stopped.code).toBe(0);
+      expect((await send("note", "--session", started.session, "--", note)).code).toBe(0);
       const day = JSON.parse((await send("day", "--json")).stdout) as typeof facts;
-      const stoppedSession = day.days.flatMap(day => day.sessions).find(session => session.session === next.session);
-      expect(stoppedSession).toBeDefined();
-      expect(stoppedSession!.notes).toEqual([note]);
-      expect(stoppedSession!.ended_at).not.toBeNull();
+      const target = day.days.flatMap(day => day.sessions).find(session => session.session === started.session);
+      const open = day.days.flatMap(day => day.sessions).find(session => session.session === next.session);
+      expect(target!.notes).toContain(note);
+      expect(open!.notes).not.toContain(note);
+      expect((await send("session", "stop", "--session", next.session)).code).toBe(0);
     }
+
+    // A stop value that is literally "--" stays that value; the real --session
+    // after it is still parsed, and the note is exactly the delimiter.
+    const delimiter = JSON.parse((await send("session", "start")).stdout) as { session: string };
+    expect((await send("session", "stop", "--note", "--", "--session", delimiter.session)).code).toBe(0);
+    const afterDelimiter = JSON.parse((await send("day", "--json")).stdout) as typeof facts;
+    const delimiterRow = afterDelimiter.days.flatMap(day => day.sessions).find(session => session.session === delimiter.session);
+    expect(delimiterRow!.notes).toEqual(["--"]);
+    expect(delimiterRow!.ended_at).not.toBeNull();
+
+    // The note group is the positional command, not the first literal "note" in
+    // the line: an option value of "note" must not move where the words start.
+    const named = JSON.parse((await send("session", "start")).stdout) as { session: string };
+    expect((await send("--project", "note", "note", "--session", named.session, "--", "kept")).code).toBe(0);
+    const afterShift = JSON.parse((await send("day", "--json")).stdout) as typeof facts;
+    const shifted = afterShift.days.flatMap(day => day.sessions).find(session => session.session === named.session);
+    expect(shifted!.notes).toEqual(["kept"]);
+    expect((await send("session", "stop", "--session", named.session)).code).toBe(0);
+  } finally {
+    await local.close(); store.close(); rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a consumed flag value never becomes a note option or the text delimiter", async () => {
+  const root = mkdtempSync(join(tmpdir(), "workspan-consumed-values-"));
+  const runtimeDir = join(root, "run");
+  const store = new WorkspanStore(join(root, "workspan.sqlite"));
+  // A closed attested session covering the latest seat-idle stretch, plus a
+  // different session that stays open: two distinct targets a misread argv could
+  // pick between, so a wrong pick is visible in the stored note's owner.
+  const base = Date.now() - 3_600_000;
+  const at = (kind: string, offset: number): void => {
+    store.ingest(validateEvent({ v: 1, source: "manual", instance: "consumed-values", session: "idle-covered", event: kind, kind, at: base + offset, origin: "attested" }), base + offset);
+  };
+  at("session-start", 0);
+  at("session-stop", 1_800_000);
+  for (const [kind, offset] of [["idle", 600_000], ["resumed", 900_000]] as const) {
+    store.ingest(validateEvent({ v: 1, source: "desktop", instance: "consumed-values", session: "desktop", event: `${kind}:${base + offset}:300000`, kind: "interaction", at: base + offset, origin: "unknown" }), base + offset);
+  }
+  const local = await startDaemon({ store, runtimeDir, idleGapMs: 900_000 });
+  const send = async (...args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> => {
+    const proc = Bun.spawn([process.execPath, join(import.meta.dir, "../src/cli/workspan.ts"), "--socket", join(runtimeDir, "workspan.sock"), ...args], { stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+    return { code: await proc.exited, stdout, stderr };
+  };
+  try {
+    const open = JSON.parse((await send("session", "start")).stdout) as { session: string };
+
+    // "--idle" is consumed as the value of "--project", so it is a value, not the
+    // idle flag. The note must go to the explicit open session, not the closed
+    // session that covers the idle stretch, and no idle block may be reported.
+    const idleValue = await send("--project", "--idle", "note", "--session", open.session, "--", "consumed-idle");
+    expect(idleValue.code).toBe(0);
+    const idleNote = JSON.parse(idleValue.stdout) as { session: string; idle?: unknown; note: { text: string } };
+    expect(idleNote.session).toBe(open.session);
+    expect(idleNote.idle).toBeUndefined();
+    expect(idleNote.note.text).toBe("consumed-idle");
+
+    // The first "--" is consumed as the value of "--project", so it is not the
+    // delimiter. Only the final unconsumed "--" starts the person's free text.
+    const delimiterValue = await send("note", "--project", "--", "--session", open.session, "--", "delimiter-text");
+    expect(delimiterValue.code).toBe(0);
+    const delimiterNote = JSON.parse(delimiterValue.stdout) as { session: string; note: { text: string } };
+    expect(delimiterNote.session).toBe(open.session);
+    expect(delimiterNote.note.text).toBe("delimiter-text");
+
+    // Exact ownership: both notes are on the open session and neither leaked.
+    const facts = JSON.parse((await send("day", "--json")).stdout) as { days: Array<{ sessions: Array<{ session: string; notes: string[] }> }> };
+    const rows = facts.days.flatMap(day => day.sessions);
+    expect(rows.find(row => row.session === open.session)!.notes).toEqual(["consumed-idle", "delimiter-text"]);
+    expect(rows.find(row => row.session === "idle-covered")!.notes).toEqual([]);
   } finally {
     await local.close(); store.close(); rmSync(root, { recursive: true, force: true });
   }

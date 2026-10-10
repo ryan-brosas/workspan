@@ -8,7 +8,9 @@
 /** The draft belongs to the session it was first typed in: a later switch or
  *  stop must never silently move it to another one. */
 function draftSessionFor(text, draftSession, session) {
-  var value = String(text == null ? "" : text)
+  // Whitespace is not a draft (hasDraft trims too), so it pins no session: the
+  // first real keystroke decides whose session the draft belongs to.
+  var value = String(text == null ? "" : text).trim()
   if (value === "") return ""
   if (draftSession === "") return session
   return draftSession
