@@ -57,9 +57,10 @@ jobs:
       - name: Test policy, lanes, daemon and adapters
         run: bun run test
       - name: Test the widget helpers on plain Node
-        # A directory (or a quoted glob) lets Node discover nested test files, so
-        # a test added under plugin/tests/<dir>/ cannot be silently skipped.
-        run: node --test plugin/tests/
+        # Quote the glob so Node's own test runner expands it: the pinned Node 22
+        # does not recursively discover a directory argument, and the `**` also
+        # matches a test added under plugin/tests/<dir>/.
+        run: node --test 'plugin/tests/**/*.test.mjs'
       # The Omarchy CLI lives on an Omarchy desktop, so the manifest is validated
       # from its own contract here rather than shelling out to it.
       - name: Validate the plugin manifest

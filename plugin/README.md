@@ -97,7 +97,7 @@ Attribution stays the company picker: nothing is inferred from what you type.
   process exits without loading any objects (plain QtQuick loads offscreen;
   importing `Quickshell` or `qs.Commons` fails). Every argv and draft decision
   therefore lives in `Draft.js` and `Workspan.js` - pure `.pragma library`
-  files exercised by `node --test plugin/tests/` - and the QML stays
+  files exercised by `node --test 'plugin/tests/**/*.test.mjs'` - and the QML stays
   a thin binding to stock components. Keyboard focus behavior (the
   `PanelKeyCatcher` `blocked` binding) must be checked live on the bar; the
   Node tests under `plugin/tests/` cannot prove it.
