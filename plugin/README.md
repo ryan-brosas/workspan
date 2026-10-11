@@ -45,29 +45,34 @@ time worked, so it is shown in the popup with its own label.
   `workspan note --idle "lunch"`, which lands on the session the stretch fell in.
 
 The popup's activity field is that same note: one line, at most 200 characters, typed by
-the person - the ledger's only free text. **Save note** files it to the session it was
-typed in, without stopping that session; **Clock out** closes the session and sends the
-field as its closing note; **Stop** is the plain stop and never sends it; **Clock in**
-runs the same `session start` action as **Start session**, next to the draft for
-convenience, without touching the field. A draft stays pinned to its original session.
-Only **Save note** and **Clock out** can clear a submitted draft after the daemon
-accepts it; **Start session**, **Clock in** and **Stop** never clear it. A failed or
-busy command keeps the text; **Discard draft** is the explicit local removal.
-Pause/Resume names the displayed session; the daemon refuses a stale target rather
-than pausing or resuming a session started by another client.
-A draft whose session has since stopped or switched still belongs to that session: the
-popup says so, Save note names that session explicitly, and it never rides along with
-a different session's clock out or clock in. Enter saves a note and never starts a
-session; an empty/whitespace-only field makes Enter and **Save note** no-ops, while
-**Clock out** still stops without a note. Surrounding whitespace is trimmed, matching
-the daemon's note contract. Escape hands keys back to the panel without clearing.
-Save note sends the activity after the CLI's `--` delimiter; Clock out's closing note
-travels as the value consumed by `--note` instead. Both keep text such as `--session`
-or `--idle` as text rather than reading it as a flag. From a terminal,
-`workspan note --session <id> -- "--idle"` saves that literal note without retargeting
-it to an idle stretch; `workspan session stop --session <id> --note "--idle"` stops
-the named session with the same literal closing note. Use either `--note <text>` or
-`-- <text>` for a closing note, not both; bare trailing words are refused.
+the person - the ledger's only free text.
+
+- Draft ownership and clearing: **Save note** files the field to the session it was
+  typed in without stopping that session; **Clock out** closes the session and sends
+  the field as its closing note; **Stop** is the plain stop and never sends it;
+  **Clock in** runs the same `session start` action as **Start session**, next to the
+  draft for convenience, without touching the field. A draft stays pinned to its
+  original session. Only **Save note** and **Clock out** can clear a submitted draft
+  after the daemon accepts it; **Start session**, **Clock in** and **Stop** never
+  clear it. A failed or busy command keeps the text; **Discard draft** is the explicit
+  local removal. A draft whose session has since stopped or switched still belongs to
+  that session: the popup says so, Save note names that session explicitly, and it
+  never rides along with a different session's clock out or clock in.
+- Keyboard: Enter saves a note and never starts a session; an empty/whitespace-only
+  field makes Enter and **Save note** no-ops, while **Clock out** still stops without
+  a note. Escape hands keys back to the panel without clearing.
+- Session targeting: Pause/Resume names the displayed session; the daemon refuses a
+  stale target rather than pausing or resuming a session started by another client.
+- CLI note contract: surrounding whitespace is trimmed, matching the daemon's note
+  contract. Save note and Clock out both send the activity after the CLI's `--`
+  delimiter, so text such as `--session` or `--idle` stays the person's words rather
+  than being read as a flag. From a terminal, `workspan note --session <id> --\
+  "--idle"` saves that literal note without retargeting it to an idle stretch;
+  `workspan session stop --session <id> -- "--idle"` stops the named session with the
+  same literal closing note. Use either `--note <text>` or `-- <text>` for a closing
+  note, not both; `session stop` refuses bare trailing words as a closing note (pass
+  them via `--note <text>` or `-- <text>`), while `workspan note <text>` accepts
+  bare positional text.
 Attribution stays the company picker: nothing is inferred from what you type.
 - A "not counted" caption: when no measure covers half an hour or more of the day,
   the popup says how much. It is the review list from `workspan day` - nothing was
@@ -92,7 +97,7 @@ Attribution stays the company picker: nothing is inferred from what you type.
   process exits without loading any objects (plain QtQuick loads offscreen;
   importing `Quickshell` or `qs.Commons` fails). Every argv and draft decision
   therefore lives in `Draft.js` and `Workspan.js` - pure `.pragma library`
-  files exercised by `node --test plugin/tests/*.test.mjs` - and the QML stays
+  files exercised by `node --test plugin/tests/` - and the QML stays
   a thin binding to stock components. Keyboard focus behavior (the
   `PanelKeyCatcher` `blocked` binding) must be checked live on the bar; the
   Node tests under `plugin/tests/` cannot prove it.

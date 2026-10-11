@@ -34,15 +34,17 @@ function clockOutConsumesDraft(text, draftSession, session) {
 }
 
 /** The argv that clocks out, or null when the draft blocks it: a draft from
- *  another session never rides along with this one's stop. The --note decision
- *  comes from clockOutConsumesDraft, so the argv and the QML's consumesDraft
- *  flag can never disagree about the same draft. */
+ *  another session never rides along with this one's stop. The closing-note
+ *  decision comes from clockOutConsumesDraft, so the argv and the QML's
+ *  consumesDraft flag can never disagree about the same draft. The note travels
+ *  after "--", exactly like Save note's, so a note of "--idle" is the person's
+ *  text and never an option. */
 function clockOutArgv(text, draftSession, session) {
   if (session === "") return null
   var value = String(text == null ? "" : text).trim()
   if (value !== "" && !clockOutConsumesDraft(text, draftSession, session)) return null
   var argv = ["session", "stop", "--session", session]
-  if (value !== "") argv = argv.concat(["--note", value])
+  if (value !== "") argv = argv.concat(["--", value])
   return argv
 }
 

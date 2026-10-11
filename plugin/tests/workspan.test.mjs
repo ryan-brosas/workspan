@@ -148,13 +148,14 @@ const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
 const controls = fs.readFileSync(new URL("../SessionControls.qml", import.meta.url), "utf8")
 // The controls are the whole action surface and stay above everything
 // advisory: the session buttons that were always there, plus the draft.
-const controlsAt = panel.search(/SessionControls\s*\{/);
+const controlsAt = panel.search(/^\s*SessionControls\s*\{/m)
 assert.ok(controlsAt !== -1, "the panel must instantiate the controls")
 assert.ok(controlsAt < panel.indexOf("root.idleHint"), "the controls must precede the idle nudge")
 // The picker block, not the property assignment far above it in the Process handler.
 assert.ok(controlsAt < panel.indexOf("root.companies.length > 0"), "the controls must precede the company picker")
 assert.ok(controlsAt < panel.indexOf("Workspan.displayRows(root.snapshot)"), "the controls must precede the measures")
-assert.match(panel, /if \(root\.projectClicked\(companyRow\.modelData\.project\)\) root\.close\(\)/)
+assert.match(panel, /onClicked: root\.projectClicked\(companyRow\.modelData\.project\)/)
+assert.match(panel, /if \(code === 0 && root\.pendingClose\) root\.close\(\)/)
 // Wiring: a dispatch refusal is not a save, a draft clears only when the daemon
 // accepted the command that carried it, and the panel's shortcuts stand down
 // while the controls own keys.
@@ -165,9 +166,18 @@ assert.match(panel, /if \(cliProcess\.running\) \{/)
 // offscreen probe: a missing CLI must be told from an ordinary exit.
 assert.match(panel, /function finishCli\(/)
 assert.match(panel, /onStarted: cliProcess\.launchStarted = true/)
-assert.match(panel, /onRunningChanged: \{/)
-assert.match(panel, /if \(running \|\| cliProcess\.launchStarted \|\| !root\.busy\) return/)
-assert.match(panel, /cliProcess\.launchStarted = false/)
+// The launch reset and guard must actually live in cliProcess.onRunningChanged,
+// not merely appear somewhere in the file.
+const ocAt = panel.indexOf("if (running) { cliProcess.launchStarted = false; return }")
+assert.ok(ocAt !== -1, "the launch reset must live in cliProcess.onRunningChanged")
+const ocBlock = panel.slice(ocAt, ocAt + 260)
+assert.match(ocBlock, /if \(cliProcess\.launchStarted \|\| !root\.busy\) return/)
+assert.match(ocBlock, /finishCli\(127/)
+// The controls receive the live session/pause state from the panel: without the
+// bindings their labels would silently stay "Clock in"/"Pause".
+const controlsBlock = panel.slice(controlsAt, controlsAt + 400)
+assert.match(controlsBlock, /session: root\.currentSessionId/)
+assert.match(controlsBlock, /paused: root\.sessionPaused/)
 // Manual clocking stays an addition: every original session button is still
 // there, and every argv decision about the draft lives in Draft.js, whose laws
 // draft.test.mjs executes.
@@ -178,6 +188,10 @@ assert.match(controls, /text: root\.session !== "" \? "Clock out" : "Clock in"/)
 assert.match(controls, /text: "Save note"/)
 assert.match(controls, /text: "Discard draft"/)
 assert.match(controls, /maximumLength: 200/)
+assert.match(controls, /placeholderText: "What were you doing\?"/)
+// blocked: controls.activeFocus is only correct while SessionControls is a
+// FocusScope, so pin that dependency instead of letting a refactor break it.
+assert.match(controls, /^FocusScope\s*\{/m)
 assert.match(controls, /Draft\.noteArgv/)
 assert.match(controls, /Draft\.clockOutArgv/)
 assert.match(controls, /Draft\.stopArgv/)

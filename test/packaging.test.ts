@@ -21,10 +21,22 @@ const installerFiles = readdirSync(join(repoRoot, "plugin"), { withFileTypes: tr
 
 test("the release copy list covers every plugin file", () => {
   const release = readFileSync(join(repoRoot, ".github/workflows/release.yml"), "utf8");
-  const line = release.split("\n").find(line => /^\s*cp plugin\//.test(line));
-  expect(line).toBeDefined();
-  const copied = [...line!.matchAll(/plugin\/([^\s]+)/g)].map(match => match[1]).sort();
-  expect(copied).toEqual(installerFiles);
+  const lines = release.split("\n").filter(line => /^\s*cp plugin\//.test(line));
+  expect(lines.length).toBeGreaterThan(0);
+  // Parse each copy command as tokens: the destination argument is not a source,
+  // and every cp line counts rather than only the first one.
+  const sources = lines.flatMap(line => line.trim().split(/\s+/).slice(1).filter(token => token.startsWith("plugin/")));
+  const named = sources.filter(source => !/^plugin\/\*\./.test(source)).map(source => source.replace(/^plugin\//, ""));
+  const globs = sources.filter(source => /^plugin\/\*\./.test(source)).map(source => source.replace(/^plugin\/\*\./, ""));
+  const covered = (name: string): boolean => named.includes(name) || globs.some(extension => name.endsWith("." + extension));
+  for (const name of installerFiles) expect(covered(name), `release copy must include plugin/${name}`).toBe(true);
+  // The workflow also diffs the built package against the source, so a file type
+  // the globs miss fails the release instead of vanishing silently.
+  expect(release).toMatch(/diff -u "\$RUNNER_TEMP\/pack-source\.txt" "\$RUNNER_TEMP\/pack-built\.txt"/);
+  // Only tests/ may live under plugin/; a new subdirectory needs its packaging
+  // verified rather than being silently excluded from installerFiles.
+  const dirs = readdirSync(join(repoRoot, "plugin"), { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name);
+  expect(dirs).toEqual(["tests"]);
 });
 const scratch = mkdtempSync(join(tmpdir(), "workspan-install-plugin-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
@@ -37,6 +49,7 @@ let lastInstallOutput = "";
  *  throwaway dir, so no live widget, backup directory or shell config is read or
  *  written - even an installer that honors the XDG spec. */
 function installIn(home: string, ...args: string[]): number {
+  mkdirSync(join(home, "run"), { recursive: true, mode: 0o700 });
   const result = spawnSync("bash", [join(repoRoot, "scripts", "install-plugin.sh"), ...args], {
     cwd: repoRoot,
     env: {
@@ -46,6 +59,7 @@ function installIn(home: string, ...args: string[]): number {
       XDG_CONFIG_HOME: join(home, ".config"),
       XDG_DATA_HOME: join(home, ".local", "share"),
       XDG_CACHE_HOME: join(home, ".cache"),
+      XDG_RUNTIME_DIR: join(home, "run"),
     },
     encoding: "utf8",
     timeout: 30_000,
@@ -97,6 +111,9 @@ test("a released ZIP installs and verifies; a ZIP missing a plugin file is refus
   expect(installIn(home, "--from", good), lastInstallOutput).toBe(0);
   expect(installIn(home, "--verify-only"), lastInstallOutput).toBe(0);
 
+  // Pin the omitted file so a rename cannot turn the incomplete archive into a
+  // complete one and stop exercising the refusal path.
+  expect(installerFiles).toContain("Draft.js");
   const bad = join(scratch, "workspan.tracker-bad.zip");
   packageZip(bad, installerFiles.filter(name => name !== "Draft.js"));
   const refused = mkdtempSync(join(scratch, "home-refused-"));

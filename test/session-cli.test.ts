@@ -24,7 +24,11 @@ function cliAt(dir: string) {
 async function json<T>(result: Promise<CliResult>): Promise<T> {
   const { code, stdout, stderr, args } = await result;
   if (code !== 0) throw new Error(`workspan ${JSON.stringify(args)} exited with ${code}: ${stderr.trim() || stdout.trim()}`);
-  return JSON.parse(stdout) as T;
+  try {
+    return JSON.parse(stdout) as T;
+  } catch {
+    throw new Error(`workspan ${JSON.stringify(args)} exited 0 with non-JSON stdout: ${stdout.trim() || "(empty)"}${stderr.trim() ? ` (stderr: ${stderr.trim()})` : ""}`);
+  }
 }
 
 const root = mkdtempSync(join(tmpdir(), "workspan-session-cli-"));
@@ -36,7 +40,12 @@ let daemon: Daemon | null = null;
 afterAll(async () => { if (daemon) await daemon.close(); store.close(); rmSync(root, { recursive: true, force: true }); });
 
 test("the widget's clock in and out commands drive one attested session end to end", async () => {
-  daemon = await startDaemon({ store, runtimeDir, idleGapMs: 900_000 });
+  // Pin the daemon clock and report day: the commands here span many process
+  // spawns, and a run straddling local midnight would otherwise file the
+  // sessions into the previous day and make the report lookups intermittent.
+  const base = Date.UTC(2026, 9, 10, 11);
+  let clock = base;
+  daemon = await startDaemon({ store, runtimeDir, idleGapMs: 900_000, now: () => clock++ });
 
   // Clock in.
   const started = await json<{ session: string }>(cli("session", "start"));
@@ -65,8 +74,8 @@ test("the widget's clock in and out commands drive one attested session end to e
   expect((await json<{ current_session: unknown }>(cli("status"))).current_session).toBeNull();
 
   // The evidence survives clocking out, and the day report can speak for it.
-  const facts = await json<{ days: Array<{ sessions: Array<{ notes: string[]; ended_at: number | null }> }> }>(cli("day", "--json"));
-  const session = facts.days.flatMap(day => day.sessions).find(row => row.notes.includes("reviewed the auth flow"));
+  const facts = await json<{ days: Array<{ sessions: Array<{ notes: string[]; ended_at: number | null }> }> }>(cli("day", "--date", "2026-10-10", "--tz", "UTC", "--json"));
+  const session = facts.days.flatMap(d => d.sessions).find(row => row.notes.includes("reviewed the auth flow"));
   expect(session).toBeDefined();
   expect(session!.ended_at).not.toBeNull();
   // Both activities are the person's own words, kept in order.
@@ -87,8 +96,11 @@ test("the draft paths: previous-session notes, leading-dash words, one line only
     const bindings = await json<Array<{ root: string; explicit: boolean }>>(send("projects", "--json"));
     expect(bindings.find(row => row.root === root)?.explicit).toBe(true);
     const started = await json<{ session: string }>(send("session", "start"));
-    // Plain stop stores no note.
+    // Plain stop stores no note: read the report back rather than trusting the
+    // later self-referential expectedNotes seed.
     expect((await send("session", "stop", "--session", started.session)).code).toBe(0);
+    const afterPlainStop = await json<{ days: Array<{ sessions: Array<{ session: string; notes: string[] }> }> }>(send("day", "--json"));
+    expect(afterPlainStop.days.flatMap(d => d.sessions).find(session => session.session === started.session)!.notes).toEqual([]);
     // The widget's Save note after a stop: the draft still files to that session.
     expect((await send("note", "drafted while it ran", "--session", started.session)).code).toBe(0);
     // A note is not a flag: leading dashes stay the words of the person.
@@ -101,7 +113,7 @@ test("the draft paths: previous-session notes, leading-dash words, one line only
     // A note stays a single line, as the daemon requires.
     expect((await send("note", "two\nlines", "--session", started.session)).code).not.toBe(0);
     const facts = await json<{ days: Array<{ sessions: Array<{ session: string; notes: string[]; ended_at: number | null }> }> }>(send("day", "--json"));
-    const row = facts.days.flatMap(day => day.sessions).find(session => session.notes.includes("drafted while it ran"));
+    const row = facts.days.flatMap(d => d.sessions).find(session => session.notes.includes("drafted while it ran"));
     expect(row).toBeDefined();
     expect(row!.ended_at).not.toBeNull();
     expect(row!.notes).toContain("--debugged the parser");
@@ -117,8 +129,8 @@ test("the draft paths: previous-session notes, leading-dash words, one line only
       const next = await json<{ session: string }>(send("session", "start"));
       expect((await send("note", "--session", started.session, "--", note)).code).toBe(0);
       const day = await json<typeof facts>(send("day", "--json"));
-      const target = day.days.flatMap(day => day.sessions).find(session => session.session === started.session);
-      const open = day.days.flatMap(day => day.sessions).find(session => session.session === next.session);
+      const target = day.days.flatMap(d => d.sessions).find(session => session.session === started.session);
+      const open = day.days.flatMap(d => d.sessions).find(session => session.session === next.session);
       expectedNotes.push(note);
       expect(target!.notes).toEqual(expectedNotes);
       expect(open!.notes).not.toContain(note);
@@ -130,7 +142,7 @@ test("the draft paths: previous-session notes, leading-dash words, one line only
     const delimiter = await json<{ session: string }>(send("session", "start"));
     expect((await send("session", "stop", "--note", "--", "--session", delimiter.session)).code).toBe(0);
     const afterDelimiter = await json<typeof facts>(send("day", "--json"));
-    const delimiterRow = afterDelimiter.days.flatMap(day => day.sessions).find(session => session.session === delimiter.session);
+    const delimiterRow = afterDelimiter.days.flatMap(d => d.sessions).find(session => session.session === delimiter.session);
     expect(delimiterRow!.notes).toEqual(["--"]);
     expect(delimiterRow!.ended_at).not.toBeNull();
 
@@ -139,7 +151,7 @@ test("the draft paths: previous-session notes, leading-dash words, one line only
     const named = await json<{ session: string }>(send("session", "start"));
     expect((await send("--project", "note", "note", "--session", named.session, "--", "kept")).code).toBe(0);
     const afterShift = await json<typeof facts>(send("day", "--json"));
-    const shifted = afterShift.days.flatMap(day => day.sessions).find(session => session.session === named.session);
+    const shifted = afterShift.days.flatMap(d => d.sessions).find(session => session.session === named.session);
     expect(shifted!.notes).toEqual(["kept"]);
 
     // Refuse ambiguity and malformed options before either adding a note or stopping.
@@ -178,7 +190,7 @@ test("the draft paths: previous-session notes, leading-dash words, one line only
     // silently dropped: the delimiter protects literal text for stop too.
     expect((await send("session", "stop", "--session", named.session, "--", "fixed the parser")).code).toBe(0);
     const afterStop = await json<typeof facts>(send("day", "--json"));
-    const stopped = afterStop.days.flatMap(day => day.sessions).find(session => session.session === named.session);
+    const stopped = afterStop.days.flatMap(d => d.sessions).find(session => session.session === named.session);
     expect(stopped!.notes).toEqual(["kept", "fixed the parser"]);
 
     // A value-taking option with no value errors instead of silently becoming a
@@ -259,7 +271,7 @@ test("a consumed flag value never becomes a note option or the text delimiter", 
 
     // Exact ownership: both notes are on the open session and neither leaked.
     const facts = await json<{ days: Array<{ sessions: Array<{ session: string; notes: string[] }> }> }>(send("day", "--date", "2026-10-10", "--tz", "UTC", "--json"));
-    const rows = facts.days.flatMap(day => day.sessions);
+    const rows = facts.days.flatMap(d => d.sessions);
     expect(rows.find(row => row.session === open.session)!.notes).toEqual(["consumed-idle", "delimiter-text"]);
     expect(rows.find(row => row.session === "idle-covered")!.notes).toEqual([]);
   } finally {

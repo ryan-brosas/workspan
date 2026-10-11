@@ -19,6 +19,9 @@ const FLAGS = new Set(["--socket", "--project", "--root", "--session", "--file",
 /** The options that are genuinely booleans. Every other recognizable option takes
  *  a value; an unknown leading-dash token is a typo, never a silent boolean. */
 const BOOLEANS = new Set(["--explicit", "--json", "--check", "--idle", "--apply", "--allow-live-database", "--dry-run", "--stdin", "--require-clean"]);
+/** The value-taking options the note command accepts; one list shared by the
+ *  pre-check and the handler, so a newly accepted option cannot drift between them. */
+const NOTE_VALUE_FLAGS = new Set(["--session", "--socket"]);
 /** One canonical read of argv, so option values, booleans, positionals and the
  *  real free-text delimiter can never disagree about which token is which. A
  *  flag's value is the token right after it, even when that value itself looks
@@ -118,6 +121,9 @@ async function ingestBatched(events: readonly unknown[]): Promise<Record<string,
   return totals;
 }
 
+/** One usage line, shared by the help path and the unknown-command failure. */
+const USAGE = `usage: workspan daemon|status|engine [--check]|health|doctor [--json]|mcp|ingest --file f.jsonl|ingest --stdin|ingest-codex [--since-days N] [--dry-run]|harness|ingest-harness [--id X] [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks c.jsonl [--require-clean]|projects|signals|migrate --chunks f.jsonl --target db [--tracker-db pi.sqlite] [--map scope=project] [--apply]|session start [--project P | --root R] [--at HH:MM|ISO|ms]|session switch|toggle [--project P | --root R]|session pause|resume [--session S] [--at HH:MM|ISO|ms]|session stop [--session S] [--at HH:MM|ISO|ms] [--note <text>] [-- <text>]|session pick|list|remove --session S --reason <why>|projects confirm <root> [project]|projects bind <root> <project> [--explicit]|note [--session S | --idle] [--] <text>|day|week [--date YYYY-MM-DD] [--tz ZONE] [--json|--export csv|md]|backup [--keep N]`;
+
 async function main(): Promise<number> {
   const [group, action] = positional;
   // Shape errors are named once, before any command runs. The note command's
@@ -128,9 +134,12 @@ async function main(): Promise<number> {
   // and --no-harness. This parser forwards argv untouched, so it must not
   // impose the client's typo/missing-value rules on `daemon`; every other
   // command keeps them.
+  // A discoverable help path, before the option-shape gates: --help/-h is not a
+  // typo, and "workspan --help" must print the usage rather than "unknown option".
+  if (unknownFlags.some(entry => entry.name === "--help" || entry.name === "-h")) { console.error(USAGE); return 0; }
   const forwarding = group === "daemon";
   if (missingValue && !forwarding) {
-    if (group === "note" && missingValue !== "--session" && missingValue !== "--socket") throw new Error(`workspan note does not take ${missingValue}; put it after -- to keep it in the note`);
+    if (group === "note" && !NOTE_VALUE_FLAGS.has(missingValue)) throw new Error(`workspan note does not take ${missingValue}; put it after -- to keep it in the note`);
     throw new Error(`option ${missingValue} requires a value`);
   }
   const unknown = unknownFlags.find(token => group !== "note" || token.at < positionalAt[0]);
@@ -265,11 +274,14 @@ async function main(): Promise<number> {
     const explicit = flag("--note");
     // The delimiter is advertised as the way literal text travels: a stop with
     // free text after "--" files it as the closing note instead of dropping it.
-    const free = delimiter !== -1 && delimiter + 1 < args.length ? args.slice(delimiter + 1).join(" ") : "";
+    // Free text comes from the canonical positional list, not raw argv: a
+    // delimiter before the action word would otherwise file the command itself.
+    const trailing = positional.slice(2);
+    const free = trailing.length > 0 ? trailing.join(" ") : undefined;
     if (positionalAt.slice(2).some(at => delimiter === -1 || at < delimiter)) throw new Error("put closing-note text after -- or use --note <text>");
-    if (explicit !== undefined && free !== "") throw new Error("choose --note or -- <text>, not both");
+    if (explicit !== undefined && free !== undefined) throw new Error("choose --note or -- <text>, not both");
     if (flags("--note").length > 1 || flags("--session").length > 1) throw new Error("session stop accepts each --note and --session only once");
-    const note = explicit !== undefined ? explicit : (free === "" ? undefined : free);
+    const note = explicit !== undefined ? explicit : free;
     console.log(JSON.stringify(await request("session.stop", { session: flag("--session"), ...(note !== undefined ? { note } : {}), ...moment() }), null, 2));
     return 0;
   }
@@ -282,7 +294,7 @@ async function main(): Promise<number> {
     // starts free text. A note is not an option, so an unknown leading-dash word
     // like "--debugged the parser" stays the person's words; a recognized flag is
     // structure, never speech, and a consumed "--idle" does not refile the note.
-    for (const name of ["--session", "--socket"]) {
+    for (const name of NOTE_VALUE_FLAGS) {
       if (flags(name).length > 1) throw new Error(`workspan note accepts ${name} only once; put literal text after --`);
     }
     const start = positionalAt[0] + 1;
@@ -295,12 +307,21 @@ async function main(): Promise<number> {
         // This subcommand consumes only --session (plus the global --socket). Any
         // other recognized option would be deleted from the note and ignored:
         // refuse it rather than drop the person's words silently.
-        if (args[i] !== "--session" && args[i] !== "--socket") throw new Error(`workspan note does not take ${args[i]}; put it after -- to keep it in the note`);
+        if (!NOTE_VALUE_FLAGS.has(args[i])) throw new Error(`workspan note does not take ${args[i]}; put it after -- to keep it in the note`);
         continue;
       }
       if (args[i] === "--idle") continue;
       if (BOOLEANS.has(args[i])) throw new Error(`workspan note does not take ${args[i]}; put it after -- to keep it in the note`);
       words.push(args[i]);
+    }
+    // A recognized boolean before the group token (--json, --check, ...) is
+    // structural, never note text, and would otherwise be dropped silently.
+    // Value-taking options before the group are consumed by the canonical parse
+    // and must not shift where the note's words begin; note's in-region check
+    // still refuses any value option this command does not consume.
+    for (const name of present) {
+      if (name === "--idle" || NOTE_VALUE_FLAGS.has(name) || !BOOLEANS.has(name)) continue;
+      throw new Error(`workspan note does not take ${name}; put it after -- to keep it in the note`);
     }
     const text = words.join(" ");
     if (!text) throw new Error("usage: workspan note [--session S | --idle] [--] <what you did>");
@@ -342,7 +363,8 @@ async function main(): Promise<number> {
   }
   if (group === "backup") {
     const raw = flag("--keep");
-    if (has("--keep") && (raw === undefined || !/^[1-9]\d*$/.test(raw))) throw new Error("--keep must be a positive integer");
+    if (flags("--keep").length > 1) throw new Error("backup accepts --keep only once");
+    if (has("--keep") && !/^[1-9]\d*$/.test(raw!)) throw new Error("--keep must be a positive integer");
     console.log(JSON.stringify(await request("backup", { ...(raw === undefined ? {} : { keep: Number(raw) }) }), null, 2));
     return 0;
   }
@@ -507,7 +529,7 @@ async function main(): Promise<number> {
     await new Promise<void>(resolve => { process.stdout.write("", () => resolve()); });
     return 0;
   }
-  throw new Error("usage: workspan daemon|status|engine [--check]|health|doctor [--json]|mcp|ingest --file f.jsonl|ingest --stdin|ingest-codex [--since-days N] [--dry-run]|harness|ingest-harness [--id X] [--since-days N] [--dry-run]|audit --turns f.jsonl --chunks f.jsonl [--require-clean]|projects|signals|migrate --chunks f.jsonl --target db [--tracker-db pi.sqlite] [--map scope=project] [--apply]|session start|switch|toggle --project P [--at HH:MM|ISO|ms]|session pause|resume [--session S] [--at HH:MM|ISO|ms]|session stop [--session S] [--at HH:MM|ISO|ms] [--note <text>] [-- <text>]|session pick|list|session remove --session S --reason <why>|projects confirm <root> [project]|projects bind <root> <project> [--explicit]|note [--session S | --idle] [--] <text>|day|week [--date YYYY-MM-DD] [--tz ZONE] [--json|--export csv|md]|backup [--keep N]");
+  throw new Error(USAGE);
 }
 
 main().then(code => process.exit(code)).catch((error: unknown) => {

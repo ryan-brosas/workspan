@@ -82,6 +82,9 @@ FocusScope {
   }
 
   function saveNote() {
+    // Enter and the Save note button share this guard: an empty or unsessioned
+    // draft never dispatches, so the two entry points cannot disagree.
+    if (!hasDraft || draftSession === "") return false
     var argv = Draft.noteArgv(activity, draftSession)
     return argv === null ? false : submit(argv, true)
   }
@@ -215,14 +218,15 @@ FocusScope {
       }
 
       Button {
+        // Save note and Discard draft gate the same way: present but disabled
+        // without a draft, so the row does not change shape as a draft appears.
         objectName: "discardDraft"
-        visible: root.hasDraft
         text: "Discard draft"
         bordered: true
         focusable: true
         foreground: root.foreground
         fontFamily: root.fontFamily
-        enabled: root.available
+        enabled: root.available && root.hasDraft
         onClicked: root.activity = ""
       }
     }

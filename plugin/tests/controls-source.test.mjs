@@ -11,18 +11,21 @@ const draftSource = readSource("../Draft.js").replace(/^\s*\.pragma\s+library[^\
 
 // Execute shipped handler bodies, not a reimplementation. This is not rendered
 // QML proof: the two-space closing brace remains part of the extraction contract.
-function extractBody(source, label, name) {
-  const match = source.match(new RegExp("^  function " + name + "\\s*\\([^)]*\\)\\s*\\{\\n([\\s\\S]*?)\\n  \\}", "m"))
+function extractFunction(source, label, name) {
+  const match = source.match(new RegExp("^  function " + name + "\\s*\\(([^)]*)\\)\\s*\\{\\n([\\s\\S]*?)\\n  \\}", "m"))
   assert.ok(match, "function " + name + " not found in " + label + " - update the extraction regex")
-  return match[1]
+  // The trailing newline keeps a body-ending // comment from swallowing the brace
+  // the wrapper appends; capturing the signature keeps the wrapper in sync with it.
+  return { params: match[1], body: match[2] + "\n" }
 }
-const helper = name => extractBody(panel, "Panel.qml", name)
-const controlsBody = name => extractBody(controls, "SessionControls.qml", name)
+const helper = name => extractFunction(panel, "Panel.qml", name)
+const controlsBody = name => extractFunction(controls, "SessionControls.qml", name)
+const invoke = (fn, context) => vm.runInNewContext("(function(" + fn.params + "){" + fn.body + "})", context)
 
 test("plain Stop never consumes an activity draft", () => {
   let sent
   const root = { activity: "reviewed auth", currentSessionId: "session-a", runCli: args => { sent = args } }
-  vm.runInNewContext("(function () {\n" + helper("stopSession") + "\n})()", { root })
+  invoke(helper("stopSession"), { root })()
   assert.equal(root.activity, "reviewed auth")
   assert.ok(Array.isArray(sent), "stopSession did not dispatch a stop command")
   assert.deepEqual(Array.from(sent), ["session", "stop", "--session", "session-a"])
@@ -31,7 +34,7 @@ test("plain Stop never consumes an activity draft", () => {
 test("runCli refuses a busy process visibly without replacing its command", () => {
   const root = { busy: true, lastError: "" }
   const cliProcess = { running: true, command: ["existing"] }
-  const run = vm.runInNewContext("(function(args) {" + helper("runCli") + "})", { root, cliProcess })
+  const run = invoke(helper("runCli"), { root, cliProcess })
   assert.equal(run(["session", "stop"]), false)
   assert.equal(root.lastError, "A command is already in progress")
   assert.deepEqual(cliProcess.command, ["existing"])
@@ -42,9 +45,7 @@ function makeControls(dispatch) {
   const c = { activity: "  work  ", draftSession: "s1", pendingDraft: null, inFlight: false, busy: false, Draft }
   Object.defineProperty(c, "available", { get() { return !c.busy && !c.inFlight } })
   c.dispatch = args => dispatch(c, args)
-  for (const [name, params] of [["submit", "args,consumesDraft"], ["completeCommand", "success"]]) {
-    c[name] = vm.runInNewContext("(function(" + params + "){" + controlsBody(name) + "})", c)
-  }
+  for (const name of ["submit", "completeCommand"]) c[name] = invoke(controlsBody(name), c)
   return c
 }
 
@@ -87,7 +88,7 @@ test("submit/completeCommand: a failed command keeps the submitted draft", () =>
 
 test("source extraction normalizes CRLF and BOM", () => {
   const windows = "\uFEFF" + panel.replace(/\n/g, "\r\n")
-  assert.equal(extractBody(normalizeSource(windows), "Panel.qml", "runCli"), helper("runCli"))
+  assert.deepEqual(extractFunction(normalizeSource(windows), "Panel.qml", "runCli"), helper("runCli"))
 })
 
 test("submit rolls back a throwing dispatcher and permits a retry", () => {
@@ -113,9 +114,9 @@ test("host settlement is inert without a controls command", () => {
 test("finishCli ignores a second completion of the same command", () => {
   let completions = 0
   let refreshes = 0
-  const root = { busy: true, lastError: "", refreshNow: () => refreshes++ }
-  const controls = { completeCommand: () => completions++ }
-  const finish = vm.runInNewContext("(function(code,errorText){" + helper("finishCli") + "})", { root, controls })
+  const root = { busy: true, lastError: "", pendingClose: false, refreshNow: () => refreshes++ }
+  const controlsStub = { completeCommand: () => completions++ }
+  const finish = invoke(helper("finishCli"), { root, controls: controlsStub })
   finish(127, "launch failed")
   finish(0, "")
   assert.equal(root.busy, false)
@@ -124,8 +125,22 @@ test("finishCli ignores a second completion of the same command", () => {
   assert.equal(refreshes, 1)
 })
 
+test("finishCli keeps a refusal notice when the in-flight command succeeds", () => {
+  const root = { busy: true, lastError: "A command is already in progress", pendingClose: false, refreshNow: () => {} }
+  const finish = invoke(helper("finishCli"), { root, controls: { completeCommand: () => {} } })
+  finish(0, "")
+  assert.equal(root.lastError, "A command is already in progress")
+})
+
+test("a pick defers its close to a successful settle", () => {
+  const root = { sessionOpen: true, pendingClose: false, runCli: () => true }
+  const pick = invoke(helper("projectClicked"), { root })
+  assert.equal(pick("project"), true)
+  assert.equal(root.pendingClose, true)
+})
+
 test("a refused project dispatch reports false so the popup stays open", () => {
   const root = { sessionOpen: true, runCli: () => false }
-  const pick = vm.runInNewContext("(function(project){" + helper("projectClicked") + "})", { root })
+  const pick = invoke(helper("projectClicked"), { root })
   assert.equal(pick("project"), false)
 })

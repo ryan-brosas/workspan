@@ -42,6 +42,8 @@ Panel {
   property double nowMs: Date.now()
   property string lastError: ""
   property bool busy: false
+  /** A project pick closes only on a successful settle, never on mere dispatch. */
+  property bool pendingClose: false
 
   readonly property string freshness: Workspan.staleness(snapshot, nowMs, refreshSeconds)
   readonly property bool online: freshness === "fresh"
@@ -86,8 +88,14 @@ Panel {
   function finishCli(code, errorText) {
     if (!root.busy) return
     root.busy = false
-    root.lastError = errorText
+    // A refusal notice must outlive the command it was refused against: only a
+    // real failure replaces lastError, and the next accepted dispatch clears it.
+    if (errorText !== "") root.lastError = errorText
     controls.completeCommand(code === 0)
+    // A pick's popup closes once the command really succeeded; a failure stays
+    // visible beside the actions that caused it instead of behind a closed popup.
+    if (code === 0 && root.pendingClose) root.close()
+    root.pendingClose = false
     root.refreshNow()
   }
 
@@ -138,21 +146,44 @@ Panel {
   }
 
   function fetchCompanies() {
-    if (!projectsProcess.running) projectsProcess.running = true
+    if (projectsProcess.running) return
+    projectsProcess.attempted = true
+    projectsProcess.launchStarted = false
+    projectsProcess.running = true
   }
 
   function fetchSignals() {
-    if (!signalsProcess.running) signalsProcess.running = true
+    if (signalsProcess.running) return
+    signalsProcess.attempted = true
+    signalsProcess.launchStarted = false
+    signalsProcess.running = true
   }
 
   function projectClicked(project) {
-    return root.runCli(root.sessionOpen ? ["session", "switch", "--project", project] : ["session", "start", "--project", project])
+    var accepted = root.runCli(root.sessionOpen ? ["session", "switch", "--project", project] : ["session", "start", "--project", project])
+    // runCli returning true only means "accepted for dispatch": the popup must
+    // stay open until finishCli sees the command succeed.
+    if (accepted) root.pendingClose = true
+    return accepted
   }
 
   Process {
     id: projectsProcess
     running: false
     command: [root.cliPath, "--socket", root.socketFile, "projects", "--json"]
+    // A missing CLI drops `running` without started() or onStreamFinished; detect
+    // it the way cliProcess does, so the picker reports it and clears stale rows.
+    property bool launchStarted: false
+    property bool attempted: false
+    onStarted: projectsProcess.launchStarted = true
+    onRunningChanged: {
+      if (running) { projectsProcess.launchStarted = false; return }
+      if (!projectsProcess.attempted) return
+      projectsProcess.attempted = false
+      if (projectsProcess.launchStarted) return
+      root.companies = []
+      root.lastError = "Could not start the workspan command: " + root.cliPath
+    }
     stdout: StdioCollector { id: projectsOut; waitForEnd: true
       onStreamFinished: {
         var bindings = []
@@ -175,6 +206,19 @@ Panel {
     id: signalsProcess
     running: false
     command: [root.cliPath, "--socket", root.socketFile, "signals"]
+    // The same missing-CLI detection the picker uses: a failed launch must clear
+    // the stale nudge and say why, not leave it silently frozen.
+    property bool launchStarted: false
+    property bool attempted: false
+    onStarted: signalsProcess.launchStarted = true
+    onRunningChanged: {
+      if (running) { signalsProcess.launchStarted = false; return }
+      if (!signalsProcess.attempted) return
+      signalsProcess.attempted = false
+      if (signalsProcess.launchStarted) return
+      root.dotPresence = null
+      root.lastError = "Could not start the workspan command: " + root.cliPath
+    }
     stdout: StdioCollector { id: signalsOut; waitForEnd: true
       onStreamFinished: {
         var parsed = null
@@ -220,7 +264,13 @@ Panel {
       // never launched. Settle it as a failure so the popup reports it, releases
       // busy, and keeps the draft. A normal exit has launchStarted set and is
       // settled by onExited, so this never double-settles.
-      if (running || cliProcess.launchStarted || !root.busy) return
+      //
+      // A failed launch can drop `running` without ever announcing `running =
+      // true` (measured on the installed Quickshell), so the mark is also cleared
+      // by runCli before every dispatch; this clause re-clears it for any dispatch
+      // that sets `running` directly.
+      if (running) { cliProcess.launchStarted = false; return }
+      if (cliProcess.launchStarted || !root.busy) return
       root.finishCli(127, "Could not start the workspan command: " + root.cliPath)
     }
   }
@@ -238,7 +288,7 @@ Panel {
     hasVisualContent: root.vertical ? root.verticalLines.length > 0 : true
     fixedHeight: root.vertical ? root.verticalLines.length * Style.bar.iconSlot : -1
     dimmed: !root.online
-    tooltipText: (root.lastError ? root.lastError + "\n" : "") + Workspan.tooltip(root.snapshot, root.nowMs, root.refreshSeconds)
+    tooltipText: (root.lastError ? "Error: " + root.lastError + "\n" : "") + Workspan.tooltip(root.snapshot, root.nowMs, root.refreshSeconds)
 
     onPressed: function (mouseButton) {
       if (mouseButton === Qt.RightButton) root.refreshNow()
@@ -412,13 +462,15 @@ Panel {
                   font.pixelSize: Style.font.bodySmall
                   width: parent.width - parent.spacing
                   elide: Text.ElideRight
+                  // A pick cannot dispatch while a command is in flight, so the row
+                  // dims and stops accepting clicks instead of doing nothing.
+                  opacity: root.busy ? 0.5 : 1.0
 
                   MouseArea {
                     anchors.fill: parent
+                    enabled: !root.busy
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: {
-                      if (root.projectClicked(companyRow.modelData.project)) root.close()
-                    }
+                    onClicked: root.projectClicked(companyRow.modelData.project)
                   }
                 }
               }

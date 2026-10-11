@@ -10,7 +10,10 @@ const source = fs.readFileSync(new URL("../Draft.js", import.meta.url), "utf8").
 // only needs the export target: injecting host constructors would make any
 // instanceof check inside Draft.js compare against the wrong realm.
 const sandbox = { module: { exports: {} } }
-vm.runInNewContext(source + "\nmodule.exports = { draftSessionFor, noteArgv, clockOutArgv, clockOutConsumesDraft, stopArgv, activityAfterCompletion }", sandbox, { filename: "Draft.js" })
+// One explicit context, so a fixture object built with runInContext below shares
+// Draft.js's own realm exactly as a QML-side caller would.
+vm.createContext(sandbox)
+vm.runInContext(source + "\nmodule.exports = { draftSessionFor, noteArgv, clockOutArgv, clockOutConsumesDraft, stopArgv, activityAfterCompletion }", sandbox, { filename: "Draft.js" })
 const D = sandbox.module.exports
 // argv arrays come from the vm realm; copy them so structural equality is not
 // tripped by the different Array prototypes of two realms.
@@ -33,15 +36,15 @@ test("Save note names its session explicitly", () => {
 })
 
 test("Clock out carries only the draft that belongs to the current session", () => {
-  assert.deepEqual(argv(D.clockOutArgv("auth work", "s1", "s1")), ["session", "stop", "--session", "s1", "--note", "auth work"])
+  assert.deepEqual(argv(D.clockOutArgv("auth work", "s1", "s1")), ["session", "stop", "--session", "s1", "--", "auth work"])
   assert.deepEqual(argv(D.clockOutArgv("", "s1", "s1")), ["session", "stop", "--session", "s1"])
   assert.equal(D.clockOutArgv("old work", "s1", "s2"), null, "a stale draft blocks the ride-along")
   assert.equal(D.clockOutArgv("work", "s1", ""), null, "no session to clock out")
 })
 
 test("Clock out carries a flag-like or padded note verbatim", () => {
-  assert.deepEqual(argv(D.clockOutArgv("--socket", "s1", "s1")), ["session", "stop", "--session", "s1", "--note", "--socket"])
-  assert.deepEqual(argv(D.clockOutArgv("  auth work  ", "s1", "s1")), ["session", "stop", "--session", "s1", "--note", "auth work"])
+  assert.deepEqual(argv(D.clockOutArgv("--socket", "s1", "s1")), ["session", "stop", "--session", "s1", "--", "--socket"])
+  assert.deepEqual(argv(D.clockOutArgv("  auth work  ", "s1", "s1")), ["session", "stop", "--session", "s1", "--", "auth work"])
   assert.equal(D.clockOutConsumesDraft("--socket", "s1", "s1"), true, "a real draft rides with its own session")
   assert.equal(D.clockOutConsumesDraft("", "s1", "s1"), false, "no draft, no note")
   assert.equal(D.clockOutConsumesDraft("   ", "s1", "s1"), false)
@@ -55,7 +58,7 @@ test("the plain stop never carries a note", () => {
 })
 
 test("a draft clears only after its own command is accepted", () => {
-  const submitted = { text: "auth work", session: "s1" }
+  const submitted = vm.runInContext("({ text: 'auth work', session: 's1' })", sandbox)
   assert.equal(D.activityAfterCompletion("auth work", "s1", submitted, true), "")
   assert.equal(D.activityAfterCompletion("auth work", "s1", submitted, false), "auth work", "a failure keeps the draft")
   assert.equal(D.activityAfterCompletion("auth work", "s1", null, true), "auth work", "nothing was submitted for this command")

@@ -33,7 +33,7 @@ done
 work=""
 # The EXIT trap must never become the script's status under `set -e`: restore the
 # status that triggered the exit, and treat a failed cleanup as its own problem.
-trap 'rc=$?; [ -z "$work" ] || rm -rf "$work" || true; exit "$rc"' EXIT
+trap 'rc=$?; [ -z "$work" ] || rm -rf "$work" || echo "install-plugin: warning: could not remove $work" >&2; exit "$rc"' EXIT
 
 if [ -n "$from" ]; then
   [ -f "$from" ] || { echo "install-plugin: no such artifact: $from" >&2; exit 2; }
@@ -43,9 +43,16 @@ if [ -n "$from" ]; then
   [ -d "$source_dir" ] || { echo "install-plugin: $from does not contain workspan.tracker/" >&2; exit 2; }
 fi
 
-files=(manifest.json Panel.qml SessionControls.qml Draft.js Workspan.js README.md)
-for name in "${files[@]}"; do
+# The plugin contract requires these files; the glob below then installs and
+# verifies every top-level file actually present, so a widget file added later
+# can never be silently skipped by a hand-maintained list.
+required=(manifest.json Panel.qml SessionControls.qml Draft.js Workspan.js README.md)
+for name in "${required[@]}"; do
   [ -f "$source_dir/$name" ] || { echo "install-plugin: missing $source_dir/$name" >&2; exit 2; }
+done
+files=()
+for path in "$source_dir"/*; do
+  [ -f "$path" ] && files+=("$(basename "$path")")
 done
 
 if ! $verify_only; then
