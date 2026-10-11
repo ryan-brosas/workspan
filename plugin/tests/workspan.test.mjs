@@ -145,23 +145,56 @@ assert.match(W.tooltip(running, NOW, 30), /middle-click to clock in\/out/)
 // comes before the advisory text and the company picker that used to push it below
 // the fold of a scrolling popup.
 const panel = fs.readFileSync(new URL("../Panel.qml", import.meta.url), "utf8")
-assert.match(panel, /text: root\.sessionOpen \? "Clock out" : "Clock in"/)
-assert.ok(panel.indexOf("Clock in") < panel.indexOf("root.idleHint"), "the clock row must precede the idle nudge")
+const controls = fs.readFileSync(new URL("../SessionControls.qml", import.meta.url), "utf8")
+// The controls are the whole action surface and stay above everything
+// advisory: the session buttons that were always there, plus the draft.
+const controlsAt = panel.search(/^\s*SessionControls\s*\{/m)
+assert.ok(controlsAt !== -1, "the panel must instantiate the controls")
+assert.ok(controlsAt < panel.indexOf("root.idleHint"), "the controls must precede the idle nudge")
 // The picker block, not the property assignment far above it in the Process handler.
-assert.ok(panel.indexOf("Clock in") < panel.indexOf("root.companies.length > 0"), "the clock row must precede the company picker")
-assert.ok(panel.indexOf("Clock in") < panel.indexOf("Workspan.displayRows(root.snapshot)"), "the clock row must precede the measures")
-
-// Clocking in and out is an additional action, never a replacement: the session
-// controls that were there before stay there.
-assert.match(panel, /text: "Stop"/)
-assert.match(panel, /text: "Save note"/)
-
-// The activity field mirrors the daemon note bound, and rides with the clock
-// actions: a note on the way out, or a note attached while the session runs.
-assert.match(panel, /placeholderText: "What were you doing\?/)
-assert.match(panel, /maximumLength: 200/)
-assert.match(panel, /args = args\.concat\(\["--note", note\]\)/)
-assert.match(panel, /root\.runCli\(\["note", note\]\)/)
+assert.ok(controlsAt < panel.indexOf("root.companies.length > 0"), "the controls must precede the company picker")
+assert.ok(controlsAt < panel.indexOf("Workspan.displayRows(root.snapshot)"), "the controls must precede the measures")
+assert.match(panel, /onClicked: root\.projectClicked\(companyRow\.modelData\.project\)/)
+assert.match(panel, /if \(code === 0 && root\.pendingClose\) root\.close\(\)/)
+// Wiring: a dispatch refusal is not a save, a draft clears only when the daemon
+// accepted the command that carried it, and the panel's shortcuts stand down
+// while the controls own keys.
+assert.match(panel, /blocked: controls\.activeFocus/)
+assert.match(panel, /controls\.completeCommand\(code === 0\)/)
+assert.match(panel, /if \(cliProcess\.running\) \{/)
+// The launch-failure settlement is real wiring in Panel.qml, not only in the
+// offscreen probe: a missing CLI must be told from an ordinary exit.
+assert.match(panel, /function finishCli\(/)
+assert.match(panel, /onStarted: cliProcess\.launchStarted = true/)
+// The launch reset and guard must actually live in cliProcess.onRunningChanged,
+// not merely appear somewhere in the file.
+const ocAt = panel.indexOf("if (running) { cliProcess.launchStarted = false; return }")
+assert.ok(ocAt !== -1, "the launch reset must live in cliProcess.onRunningChanged")
+const ocBlock = panel.slice(ocAt, ocAt + 260)
+assert.match(ocBlock, /if \(cliProcess\.launchStarted \|\| !root\.busy\) return/)
+assert.match(ocBlock, /finishCli\(127/)
+// The controls receive the live session/pause state from the panel: without the
+// bindings their labels would silently stay "Clock in"/"Pause".
+const controlsBlock = panel.slice(controlsAt, controlsAt + 400)
+assert.match(controlsBlock, /session: root\.currentSessionId/)
+assert.match(controlsBlock, /paused: root\.sessionPaused/)
+// Manual clocking stays an addition: every original session button is still
+// there, and every argv decision about the draft lives in Draft.js, whose laws
+// draft.test.mjs executes.
+assert.match(controls, /text: "Start session"/)
+assert.match(controls, /text: root\.paused \? "Resume" : "Pause"/)
+assert.match(controls, /text: "Stop"/)
+assert.match(controls, /text: root\.session !== "" \? "Clock out" : "Clock in"/)
+assert.match(controls, /text: "Save note"/)
+assert.match(controls, /text: "Discard draft"/)
+assert.match(controls, /maximumLength: 200/)
+assert.match(controls, /placeholderText: "What were you doing\?"/)
+// blocked: controls.activeFocus is only correct while SessionControls is a
+// FocusScope, so pin that dependency instead of letting a refactor break it.
+assert.match(controls, /^FocusScope\s*\{/m)
+assert.match(controls, /Draft\.noteArgv/)
+assert.match(controls, /Draft\.clockOutArgv/)
+assert.match(controls, /Draft\.stopArgv/)
 assert.match(W.tooltip(status, NOW, 30), /never added together/)
 assert.match(W.NON_ADDITIVE, /never added together/)
 

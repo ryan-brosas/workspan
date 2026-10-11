@@ -16,7 +16,7 @@ $XDG_RUNTIME_DIR/workspan/workspan.sock       the daemon socket, used by the CLI
 | --- | --- |
 | Bar | The strongest *attended* evidence (attested if any, else inferred) as `1:05`; dimmed with a dot when the daemon has stopped writing, plus an optional glyph |
 | Tooltip | All three measures side by side, and the sentence that they are never added together |
-| Popup | **Clock in / Clock out** first, with Pause/Resume, Stop, Refresh and Save note, plus the activity field that rides with them. Then the session line with state and provisional time, each measure against the projects it is allocated to, unallocated and ambiguous evidence, coverage warnings, and the seat-idle nudge |
+| Popup | The session buttons - **Start session, Pause/Resume, Stop, Refresh** - and below them the manual activity draft: a one-line field with **Clock in / Clock out**, **Save note** and **Discard draft**. Then the session line with state and provisional time, each measure against the projects it is allocated to, unallocated and ambiguous evidence, coverage warnings, the seat-idle nudge and the Dot nudge caption, and the agent runtime's own labeled line |
 
 For a single key or menu row, `workspan session toggle` starts when nothing is open and stops
 what is open. The Omarchy menu already carries both paths: **Start / stop tracking**
@@ -45,8 +45,34 @@ time worked, so it is shown in the popup with its own label.
   `workspan note --idle "lunch"`, which lands on the session the stretch fell in.
 
 The popup's activity field is that same note: one line, at most 200 characters, typed by
-the person - the ledger's only free text. **Clock out** writes it as the session note and
-clears the field; **Save note** attaches it to the running session without stopping it.
+the person - the ledger's only free text.
+
+- Draft ownership and clearing: **Save note** files the field to the session it was
+  typed in without stopping that session; **Clock out** closes the session and sends
+  the field as its closing note; **Stop** is the plain stop and never sends it;
+  **Clock in** runs the same `session start` action as **Start session**, next to the
+  draft for convenience, without touching the field. A draft stays pinned to its
+  original session. Only **Save note** and **Clock out** can clear a submitted draft
+  after the daemon accepts it; **Start session**, **Clock in** and **Stop** never
+  clear it. A failed or busy command keeps the text; **Discard draft** is the explicit
+  local removal. A draft whose session has since stopped or switched still belongs to
+  that session: the popup says so, Save note names that session explicitly, and it
+  never rides along with a different session's clock out or clock in.
+- Keyboard: Enter saves a note and never starts a session; an empty/whitespace-only
+  field makes Enter and **Save note** no-ops, while **Clock out** still stops without
+  a note. Escape hands keys back to the panel without clearing.
+- Session targeting: Pause/Resume names the displayed session; the daemon refuses a
+  stale target rather than pausing or resuming a session started by another client.
+- CLI note contract: surrounding whitespace is trimmed, matching the daemon's note
+  contract. Save note and Clock out both send the activity after the CLI's `--`
+  delimiter, so text such as `--session` or `--idle` stays the person's words rather
+  than being read as a flag. From a terminal, `workspan note --session <id> --\
+  "--idle"` saves that literal note without retargeting it to an idle stretch;
+  `workspan session stop --session <id> -- "--idle"` stops the named session with the
+  same literal closing note. Use either `--note <text>` or `-- <text>` for a closing
+  note, not both; `session stop` refuses bare trailing words as a closing note (pass
+  them via `--note <text>` or `-- <text>`), while `workspan note <text>` accepts
+  bare positional text.
 Attribution stays the company picker: nothing is inferred from what you type.
 - A "not counted" caption: when no measure covers half an hour or more of the day,
   the popup says how much. It is the review list from `workspan day` - nothing was
@@ -65,6 +91,16 @@ Attribution stays the company picker: nothing is inferred from what you type.
   `OpticalGlyph` exactly like the stock clock: text when the bar is horizontal,
   one glyph per stacked line when it is vertical (`1h` over `05m`), with the
   bar's native tooltip, press states and offline dimming.
+- **Decisions in a plain library, not in QML.** The shell's stock components
+  cannot run under `qml` or `qmltestrunner` outside the shell itself: the
+  `qs.Commons` singletons import Quickshell, so the `qml`/`qmltestrunner`
+  process exits without loading any objects (plain QtQuick loads offscreen;
+  importing `Quickshell` or `qs.Commons` fails). Every argv and draft decision
+  therefore lives in `Draft.js` and `Workspan.js` - pure `.pragma library`
+  files exercised by `node --test plugin/tests/` - and the QML stays
+  a thin binding to stock components. Keyboard focus behavior (the
+  `PanelKeyCatcher` `blocked` binding) must be checked live on the bar; the
+  Node tests under `plugin/tests/` cannot prove it.
 
 ## Settings
 
@@ -90,7 +126,7 @@ scripts/install-plugin.sh --from ~/Downloads/workspan.tracker-0.2.2.zip   # a re
 scripts/install-plugin.sh --verify-only      # compare what is installed with the source
 ```
 
-The script installs the four plugin files and fails unless every installed file matches
+The script installs every plugin file and fails unless each installed file matches
 the source byte for byte - the check that catches a stale widget, which looks exactly
 like a missing feature. A previous copy is backed up under
 `~/.local/state/workspan/plugin-backups/`, never inside the plugins directory: a backup
@@ -98,5 +134,6 @@ there keeps the same manifest id, and two directories claiming `workspan.tracker
 the bar resolve the widget to the stale copy. The shell reloads plugin code when
 a file under that directory changes; force it with `omarchy-shell shell rescanPlugins`.
 
-The plugin holds no durable state of its own: removing it loses nothing but the
-display.
+The plugin holds no durable state of its own. Removing, recreating or reloading it -
+or restarting the shell - can lose an unsaved activity draft, but daemon sessions
+and saved notes are unaffected.

@@ -128,11 +128,19 @@ jobs:
         run: |
           set -euo pipefail
           version="${TAG#v}"
-          mkdir -p "$RUNNER_TEMP/pack/workspan.tracker"
-          cp plugin/manifest.json plugin/Panel.qml plugin/Workspan.js plugin/README.md "$RUNNER_TEMP/pack/workspan.tracker/"
+          pack="$RUNNER_TEMP/pack/workspan.tracker"
+          mkdir -p "$pack"
+          # Ship every top-level runtime file by pattern: a widget file added or
+          # renamed later cannot silently drop out of the package.
+          cp plugin/manifest.json plugin/README.md plugin/*.qml plugin/*.js "$pack/"
+          # And prove the package holds everything the source ships, so a new file
+          # type (an asset, another doc) fails the release instead of vanishing.
+          (cd plugin && find . -maxdepth 1 -type f -printf '%f\n' | sort) > "$RUNNER_TEMP/pack-source.txt"
+          (cd "$pack" && find . -maxdepth 1 -type f -printf '%f\n' | sort) > "$RUNNER_TEMP/pack-built.txt"
+          diff -u "$RUNNER_TEMP/pack-source.txt" "$RUNNER_TEMP/pack-built.txt"
           (cd "$RUNNER_TEMP/pack" && zip -qr "$RUNNER_TEMP/workspan.tracker-$version.zip" workspan.tracker)
           # The package must state the version it is published under.
-          test "$(jq -r .version "$RUNNER_TEMP/pack/workspan.tracker/manifest.json")" = "$version"
+          test "$(jq -r .version "$pack/manifest.json")" = "$version"
           echo "zip=$RUNNER_TEMP/workspan.tracker-$version.zip" >> "$GITHUB_OUTPUT"
       - name: Publish the release
         env:
